@@ -35,11 +35,38 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let lines: Vec<Line> = app
+    let mut lines: Vec<Line> = app
         .messages
         .iter()
         .flat_map(|msg| render_message(msg, &app.character_name))
         .collect();
+
+    // Show streaming content with a cursor indicator
+    if app.is_streaming && !app.streaming.is_empty() {
+        let header = Line::from(vec![
+            Span::styled(
+                format!("[{}] ", app.character_name),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        lines.push(header);
+
+        let content_with_cursor = format!("{}▌", app.streaming);
+        for content_line in content_with_cursor.lines() {
+            lines.push(Line::from(Span::styled(
+                content_line.to_string(),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        lines.push(Line::from(""));
+    } else if app.is_streaming {
+        // Streaming but no content yet — show thinking indicator
+        lines.push(Line::from(Span::styled(
+            "▌",
+            Style::default().fg(Color::Magenta),
+        )));
+        lines.push(Line::from(""));
+    }
 
     let visible_height = area.height.saturating_sub(2) as usize;
     let total_lines = lines.len().max(1);
@@ -132,6 +159,8 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     let status_text = if let Some(ref err) = app.error {
         Span::styled(format!(" 错误: {} ", err), Style::default().fg(Color::Red))
+    } else if app.is_streaming {
+        Span::styled(" 流式输出中... ", Style::default().fg(Color::Yellow))
     } else if app.loading {
         Span::styled(" 等待回复... ", Style::default().fg(Color::Yellow))
     } else {

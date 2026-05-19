@@ -29,8 +29,26 @@ async fn main() -> anyhow::Result<()> {
         let system_prompt = character::build_system_prompt(&card);
 
         println!("\n[{}]", card.meta.name);
-        let reply = llm::chat(&cfg.llm, &system_prompt, &msg).await?;
-        println!("{}\n", reply);
+
+        if cfg.llm.stream {
+            let messages = vec![
+                llm::ChatMessage { role: "system".into(), content: system_prompt },
+                llm::ChatMessage { role: "user".into(), content: msg },
+            ];
+            let mut rx = llm::chat_stream(cfg.llm, messages);
+            while let Some(event) = rx.recv().await {
+                match event {
+                    llm::StreamEvent::Token(t) => print!("{}", t),
+                    llm::StreamEvent::Done(_) => { println!(); break; }
+                    llm::StreamEvent::Error(e) => { eprintln!("\nError: {}", e); break; }
+                }
+            }
+        } else {
+            let reply = llm::chat(&cfg.llm, &system_prompt, &msg).await?;
+            println!("{}", reply);
+        }
+
+        println!();
     } else {
         // TUI mode
         tui::app::run(&args.character).await?;

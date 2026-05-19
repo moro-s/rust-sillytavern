@@ -1,6 +1,7 @@
 use crate::character;
 use crate::config;
 use crate::llm;
+use crate::llm::StreamEvent;
 use crate::tui::ui;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -24,6 +25,10 @@ pub struct App {
     pub scroll_offset: usize,
     pub error: Option<String>,
     pub show_help: bool,
+    /// Accumulated streaming content (not yet committed to messages)
+    pub streaming: String,
+    /// Whether we're in streaming mode
+    pub is_streaming: bool,
 }
 
 impl App {
@@ -49,6 +54,8 @@ impl App {
             scroll_offset: 0,
             error: None,
             show_help: false,
+            streaming: String::new(),
+            is_streaming: false,
         })
     }
 
@@ -64,22 +71,10 @@ impl App {
             content: input,
         });
         self.loading = true;
+        self.is_streaming = true;
+        self.streaming.clear();
         self.error = None;
-    }
-
-    fn handle_response(&mut self, result: anyhow::Result<String>) {
-        self.loading = false;
-        match result {
-            Ok(content) => {
-                self.messages.push(Message {
-                    role: "assistant".into(),
-                    content,
-                });
-            }
-            Err(e) => {
-                self.error = Some(format!("{:#}", e));
-            }
-        }
+        self.scroll_offset = 0; // auto-scroll to bottom
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -102,15 +97,21 @@ pub async fn run(character_name: &str) -> anyhow::Result<()> {
     result
 }
 
+enum AppEvent {
+    Stream(StreamEvent),
+    NonStream(anyhow::Result<String>),
+}
+
 async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow::Result<()> {
     let mut app = App::new(character_name)?;
     let cfg = config::load()?;
-    let (tx, mut rx) = mpsc::unbounded_channel::<anyhow::Result<String>>();
+    let use_stream = cfg.llm.stream;
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        // Poll for events with a short timeout to keep UI responsive
+        // Poll for keyboard events
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Release {
@@ -143,25 +144,33 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                                 })
                                 .collect();
 
-                            let tx = tx.clone();
-                            tokio::spawn(async move {
-                                // Build full context with system prompt and history
-                                let all_messages = {
-                                    let mut msgs = vec![
-                                        llm::ChatMessage {
-                                            role: "system".into(),
-                                            content: system_prompt,
-                                        },
-                                    ];
-                                    // Only include the last few messages to avoid token overflow
-                                    let recent = history.iter().rev().take(20).rev();
-                                    msgs.extend(recent.cloned());
-                                    msgs
-                                };
+                            let all_messages = {
+                                let mut msgs = vec![
+                                    llm::ChatMessage {
+                                        role: "system".into(),
+                                        content: system_prompt,
+                                    },
+                                ];
+                                let recent = history.iter().rev().take(20).rev();
+                                msgs.extend(recent.cloned());
+                                msgs
+                            };
 
-                                let result = llm::chat_with_messages(&llm_config, &all_messages).await;
-                                let _ = tx.send(result);
-                            });
+                            if use_stream {
+                                let mut stream_rx = llm::chat_stream(llm_config, all_messages);
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    while let Some(event) = stream_rx.recv().await {
+                                        let _ = tx.send(AppEvent::Stream(event));
+                                    }
+                                });
+                            } else {
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    let result = llm::chat_with_messages(&llm_config, &all_messages).await;
+                                    let _ = tx.send(AppEvent::NonStream(result));
+                                });
+                            }
                         }
                     }
                     KeyCode::Char(c) => {
@@ -215,9 +224,41 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
             }
         }
 
-        // Check for LLM response
-        while let Ok(result) = rx.try_recv() {
-            app.handle_response(result);
+        // Process LLM events
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AppEvent::Stream(StreamEvent::Token(token)) => {
+                    app.streaming.push_str(&token);
+                }
+                AppEvent::Stream(StreamEvent::Done(full)) => {
+                    app.messages.push(Message {
+                        role: "assistant".into(),
+                        content: full,
+                    });
+                    app.streaming.clear();
+                    app.loading = false;
+                    app.is_streaming = false;
+                }
+                AppEvent::Stream(StreamEvent::Error(msg)) => {
+                    app.error = Some(msg);
+                    app.loading = false;
+                    app.is_streaming = false;
+                    app.streaming.clear();
+                }
+                AppEvent::NonStream(Ok(content)) => {
+                    app.messages.push(Message {
+                        role: "assistant".into(),
+                        content,
+                    });
+                    app.loading = false;
+                    app.is_streaming = false;
+                }
+                AppEvent::NonStream(Err(e)) => {
+                    app.error = Some(format!("{:#}", e));
+                    app.loading = false;
+                    app.is_streaming = false;
+                }
+            }
         }
     }
 
