@@ -177,6 +177,26 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
 
                 match key.code {
                     KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        // Ctrl+C: copy input to clipboard
+                        if !app.input.is_empty() {
+                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                let _ = cb.set_text(&app.input);
+                            }
+                        }
+                    }
+                    KeyCode::Char('v') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        // Ctrl+V: paste from clipboard
+                        if !app.loading {
+                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                if let Ok(text) = cb.get_text() {
+                                    for c in text.chars() {
+                                        app.insert_char(c);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('q') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                         break;
                     }
                     KeyCode::F(1) => {
