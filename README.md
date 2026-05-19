@@ -47,11 +47,15 @@ cargo run
 # 指定角色进入 TUI
 cargo run -- -c mage
 
+# 指定世界（预留）
+cargo run -- -w faerun -c innkeeper
+
 # CLI 单次对话模式
 cargo run -- -m "来杯麦酒"
 
-# CLI 指定角色
-cargo run -- -c mage -m "教我火球术"
+# 列出可用角色 / 世界
+cargo run -- --cl
+cargo run -- --wl
 ```
 
 ### TUI 快捷键
