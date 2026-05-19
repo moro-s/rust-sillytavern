@@ -35,11 +35,12 @@ async fn main() -> anyhow::Result<()> {
                 llm::ChatMessage { role: "system".into(), content: system_prompt },
                 llm::ChatMessage { role: "user".into(), content: msg },
             ];
-            let mut rx = llm::chat_stream(cfg.llm, messages);
+            let mut rx = llm::chat_stream(cfg.llm, messages, None);
             while let Some(event) = rx.recv().await {
                 match event {
                     llm::StreamEvent::Token(t) => print!("{}", t),
                     llm::StreamEvent::Done(_) => { println!(); break; }
+                    llm::StreamEvent::Cancelled(_) => { println!("\n[已取消]"); break; }
                     llm::StreamEvent::Error(e) => { eprintln!("\nError: {}", e); break; }
                 }
             }

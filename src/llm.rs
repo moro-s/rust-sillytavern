@@ -49,6 +49,8 @@ pub enum StreamEvent {
     Token(String),
     /// Stream completed successfully (accumulated full text)
     Done(String),
+    /// Stream cancelled (accumulated partial text)
+    Cancelled(String),
     /// Stream failed
     Error(String),
 }
@@ -117,15 +119,17 @@ pub async fn chat_with_messages(
     Ok(content)
 }
 
-/// Streaming chat — returns a receiver for token-by-token output
+/// Streaming chat — returns a receiver for token-by-token output.
+/// Pass a `cancel` watch receiver to support interruption.
 pub fn chat_stream(
     config: LlmConfig,
     messages: Vec<ChatMessage>,
+    cancel: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> mpsc::UnboundedReceiver<StreamEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
 
     tokio::spawn(async move {
-        let result = stream_impl(&config, &messages, &tx).await;
+        let result = stream_impl(&config, &messages, &tx, cancel).await;
         if let Err(e) = result {
             let _ = tx.send(StreamEvent::Error(format!("{:#}", e)));
         }
@@ -138,6 +142,7 @@ async fn stream_impl(
     config: &LlmConfig,
     messages: &[ChatMessage],
     tx: &mpsc::UnboundedSender<StreamEvent>,
+    mut cancel: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> anyhow::Result<()> {
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
 
@@ -168,37 +173,89 @@ async fn stream_impl(
     let mut stream = resp.bytes_stream();
 
     use futures_util::StreamExt;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("Failed to read stream chunk")?;
-        let text = String::from_utf8_lossy(&chunk);
 
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || !line.starts_with("data: ") {
-                continue;
-            }
-
-            let data = &line[6..]; // strip "data: "
-            if data == "[DONE]" {
-                let _ = tx.send(StreamEvent::Done(full_text));
+    loop {
+        // Check for cancellation before reading next chunk
+        if let Some(ref mut cancel_rx) = cancel {
+            if *cancel_rx.borrow() {
+                let _ = tx.send(StreamEvent::Cancelled(full_text));
                 return Ok(());
             }
+            // Wait for either: cancel signal or next chunk
+            let next = tokio::select! {
+                biased;
+                _ = cancel_rx.changed() => {
+                    let _ = tx.send(StreamEvent::Cancelled(full_text));
+                    return Ok(());
+                }
+                chunk = stream.next() => {
+                    chunk
+                }
+            };
+            let Some(chunk) = next else { break };
+            let chunk = chunk.context("Failed to read stream chunk")?;
+            let text = String::from_utf8_lossy(&chunk);
 
-            match serde_json::from_str::<StreamChunk>(data) {
-                Ok(chunk) => {
-                    if let Some(delta) = chunk
-                        .choices
-                        .first()
-                        .and_then(|c| c.delta.content.as_deref())
-                    {
-                        if !delta.is_empty() {
-                            full_text.push_str(delta);
-                            let _ = tx.send(StreamEvent::Token(delta.to_string()));
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || !line.starts_with("data: ") {
+                    continue;
+                }
+
+                let data = &line[6..];
+                if data == "[DONE]" {
+                    let _ = tx.send(StreamEvent::Done(full_text));
+                    return Ok(());
+                }
+
+                match serde_json::from_str::<StreamChunk>(data) {
+                    Ok(chunk) => {
+                        if let Some(delta) = chunk
+                            .choices
+                            .first()
+                            .and_then(|c| c.delta.content.as_deref())
+                        {
+                            if !delta.is_empty() {
+                                full_text.push_str(delta);
+                                let _ = tx.send(StreamEvent::Token(delta.to_string()));
+                            }
                         }
                     }
+                    Err(_) => {}
                 }
-                Err(_) => {
-                    // Skip unparseable lines
+            }
+        } else {
+            // No cancel token: simple loop
+            let Some(chunk) = stream.next().await else { break };
+            let chunk = chunk.context("Failed to read stream chunk")?;
+            let text = String::from_utf8_lossy(&chunk);
+
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || !line.starts_with("data: ") {
+                    continue;
+                }
+
+                let data = &line[6..];
+                if data == "[DONE]" {
+                    let _ = tx.send(StreamEvent::Done(full_text));
+                    return Ok(());
+                }
+
+                match serde_json::from_str::<StreamChunk>(data) {
+                    Ok(chunk) => {
+                        if let Some(delta) = chunk
+                            .choices
+                            .first()
+                            .and_then(|c| c.delta.content.as_deref())
+                        {
+                            if !delta.is_empty() {
+                                full_text.push_str(delta);
+                                let _ = tx.send(StreamEvent::Token(delta.to_string()));
+                            }
+                        }
+                    }
+                    Err(_) => {}
                 }
             }
         }

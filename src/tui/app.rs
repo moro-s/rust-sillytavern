@@ -29,6 +29,8 @@ pub struct App {
     pub streaming: String,
     /// Whether we're in streaming mode
     pub is_streaming: bool,
+    /// Cancel sender for the current LLM request
+    pub cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl App {
@@ -56,6 +58,7 @@ impl App {
             show_help: false,
             streaming: String::new(),
             is_streaming: false,
+            cancel_tx: None,
         })
     }
 
@@ -118,7 +121,10 @@ impl App {
         self.is_streaming = true;
         self.streaming.clear();
         self.error = None;
-        self.scroll_offset = 0; // auto-scroll to bottom
+        self.scroll_offset = 0;
+        // Create a new cancel token for this request
+        let (cancel_tx, _) = tokio::sync::watch::channel(false);
+        self.cancel_tx = Some(cancel_tx);
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -236,7 +242,8 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                         };
 
                         if use_stream {
-                            let mut stream_rx = llm::chat_stream(llm_config, all_messages);
+                            let cancel_rx = app.cancel_tx.take().map(|tx| tx.subscribe());
+                            let mut stream_rx = llm::chat_stream(llm_config, all_messages, cancel_rx);
                             let tx = tx.clone();
                             tokio::spawn(async move {
                                 while let Some(event) = stream_rx.recv().await {
@@ -289,7 +296,14 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                         app.scroll_down(5);
                     }
                     KeyCode::Esc => {
-                        app.scroll_to_bottom();
+                        if app.loading {
+                            // Cancel current LLM request
+                            if let Some(tx) = app.cancel_tx.take() {
+                                let _ = tx.send(true);
+                            }
+                        } else {
+                            app.scroll_to_bottom();
+                        }
                     }
                     _ => {}
                 }
@@ -304,6 +318,18 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                 AppEvent::Stream(StreamEvent::Token(token)) => {
                     app.streaming.push_str(&token);
                 }
+                AppEvent::Stream(StreamEvent::Cancelled(partial)) => {
+                    if !partial.is_empty() {
+                        app.messages.push(Message {
+                            role: "assistant".into(),
+                            content: format!("{} [已打断]", partial),
+                        });
+                    }
+                    app.streaming.clear();
+                    app.loading = false;
+                    app.is_streaming = false;
+                    app.cancel_tx = None;
+                }
                 AppEvent::Stream(StreamEvent::Done(full)) => {
                     app.messages.push(Message {
                         role: "assistant".into(),
@@ -312,12 +338,14 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                     app.streaming.clear();
                     app.loading = false;
                     app.is_streaming = false;
+                    app.cancel_tx = None;
                 }
                 AppEvent::Stream(StreamEvent::Error(msg)) => {
                     app.error = Some(msg);
                     app.loading = false;
                     app.is_streaming = false;
                     app.streaming.clear();
+                    app.cancel_tx = None;
                 }
                 AppEvent::NonStream(Ok(content)) => {
                     app.messages.push(Message {
@@ -326,11 +354,13 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                     });
                     app.loading = false;
                     app.is_streaming = false;
+                    app.cancel_tx = None;
                 }
                 AppEvent::NonStream(Err(e)) => {
                     app.error = Some(format!("{:#}", e));
                     app.loading = false;
                     app.is_streaming = false;
+                    app.cancel_tx = None;
                 }
             }
         }

@@ -129,7 +129,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let title = if app.loading {
         " 输入 (思考中...) "
     } else {
-        " 输入 (Enter 发送, Ctrl+C 复制, Ctrl+V 粘贴, /exit 退出, F1 帮助) "
+                " 输入 (Enter 发送, Esc 打断, Ctrl+C/V 复制粘贴, F1 帮助) "
     };
 
     let block = Block::default()
@@ -195,7 +195,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("F1         - 显示/隐藏帮助"),
         Line::from("↑ / ↓      - 向上/向下滚动聊天记录"),
         Line::from("PgUp/PgDn  - 快速滚动"),
-        Line::from("Esc        - 跳转到最新消息"),
+        Line::from("Esc        - 打断回复 / 跳转到最新消息"),
         Line::from("← / →      - 移动光标"),
         Line::from("Home/End   - 光标跳到行首/行尾"),
         Line::from(""),
