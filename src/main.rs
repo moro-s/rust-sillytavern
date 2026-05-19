@@ -1,6 +1,7 @@
 mod character;
 mod config;
 mod llm;
+mod tui;
 
 use clap::Parser;
 
@@ -12,22 +13,28 @@ struct Args {
     #[arg(short = 'c', long = "char", default_value = "innkeeper")]
     character: String,
 
-    /// 发给角色的消息
+    /// 发给角色的消息（CLI 模式；不填则进入 TUI 交互模式）
     #[arg(short, long)]
-    message: String,
+    message: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let cfg = config::load()?;
-    let card = character::load(&args.character)?;
-    let system_prompt = character::build_system_prompt(&card);
+    if let Some(msg) = args.message {
+        // CLI mode
+        let cfg = config::load()?;
+        let card = character::load(&args.character)?;
+        let system_prompt = character::build_system_prompt(&card);
 
-    println!("\n[{}]", card.meta.name);
-    let reply = llm::chat(&cfg.llm, &system_prompt, &args.message).await?;
-    println!("{}\n", reply);
+        println!("\n[{}]", card.meta.name);
+        let reply = llm::chat(&cfg.llm, &system_prompt, &msg).await?;
+        println!("{}\n", reply);
+    } else {
+        // TUI mode
+        tui::app::run(&args.character).await?;
+    }
 
     Ok(())
 }

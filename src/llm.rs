@@ -31,20 +31,28 @@ pub async fn chat(
     system_prompt: &str,
     user_message: &str,
 ) -> anyhow::Result<String> {
+    let messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: system_prompt.into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: user_message.into(),
+        },
+    ];
+    chat_with_messages(config, &messages).await
+}
+
+pub async fn chat_with_messages(
+    config: &LlmConfig,
+    messages: &[ChatMessage],
+) -> anyhow::Result<String> {
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
 
     let body = ChatRequest {
         model: config.model.clone(),
-        messages: vec![
-            ChatMessage {
-                role: "system".into(),
-                content: system_prompt.into(),
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: user_message.into(),
-            },
-        ],
+        messages: messages.to_vec(),
         temperature: 0.8,
         stream: false,
     };
