@@ -1,0 +1,33 @@
+mod character;
+mod config;
+mod llm;
+
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(name = "rust-SillyTavern")]
+#[command(about = "AI role-playing tavern in terminal", long_about = None)]
+struct Args {
+    /// 角色名（对应 characters/ 目录下的 .md 文件，不含扩展名）
+    #[arg(short = 'c', long = "char", default_value = "innkeeper")]
+    character: String,
+
+    /// 发给角色的消息
+    #[arg(short, long)]
+    message: String,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    let cfg = config::load()?;
+    let card = character::load(&args.character)?;
+    let system_prompt = character::build_system_prompt(&card);
+
+    println!("\n[{}]", card.meta.name);
+    let reply = llm::chat(&cfg.llm, &system_prompt, &args.message).await?;
+    println!("{}\n", reply);
+
+    Ok(())
+}
