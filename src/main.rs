@@ -2,6 +2,7 @@ mod character;
 mod command;
 mod config;
 mod conversation;
+mod db;
 mod llm;
 mod lorebook;
 mod tui;
@@ -31,6 +32,18 @@ struct Args {
     /// 发给角色的消息（CLI 模式；不填则进入 TUI 交互模式）
     #[arg(short, long)]
     message: Option<String>,
+
+    /// 开始新会话（不恢复上次会话）
+    #[arg(long = "new-session")]
+    new_session: bool,
+
+    /// 列出所有历史会话
+    #[arg(long = "ls", alias = "list-sessions")]
+    list_sessions: bool,
+
+    /// 恢复指定会话 ID
+    #[arg(long = "resume")]
+    resume_id: Option<i64>,
 }
 
 fn scan_characters() -> Vec<String> {
@@ -113,6 +126,10 @@ async fn main() -> anyhow::Result<()> {
         list_available_worlds();
         return Ok(());
     }
+    if args.list_sessions {
+        list_saved_sessions();
+        return Ok(());
+    }
 
     if let Some(msg) = args.message {
         // CLI mode: use specified character or default
@@ -147,8 +164,46 @@ async fn main() -> anyhow::Result<()> {
         println!();
     } else {
         // TUI mode
-        tui::app::run(args.character, args.world).await?;
+        tui::app::run(args.character, args.world, args.resume_id, args.new_session).await?;
     }
 
     Ok(())
+}
+
+fn list_saved_sessions() {
+    match db::schema::open() {
+        Ok(conn) => {
+            match db::store::list_sessions(&conn) {
+                Ok(sessions) => {
+                    if sessions.is_empty() {
+                        println!("\n暂无保存的会话\n");
+                    } else {
+                        println!("\n已保存的会话:\n");
+                        for s in &sessions {
+                            println!(
+                                "  [{id}] {name:20} | {char:15} | {count:3} 条消息 | {time}",
+                                id = s.id,
+                                name = truncate(&s.name, 20),
+                                char = truncate(&s.character_name, 15),
+                                count = s.message_count,
+                                time = &s.updated_at[..s.updated_at.len().min(16)],
+                            );
+                        }
+                        println!("\n共 {} 个会话\n", sessions.len());
+                    }
+                }
+                Err(e) => eprintln!("Failed to list sessions: {}", e),
+            }
+        }
+        Err(e) => eprintln!("Failed to open database: {}", e),
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() > max {
+        format!("{}...", s.chars().take(max - 3).collect::<String>())
+    } else {
+        s.to_string()
+    }
 }

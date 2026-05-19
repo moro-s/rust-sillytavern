@@ -14,7 +14,7 @@ AI 角色扮演酒馆 —— 终端里的沉浸式角色扮演体验。受 [Sill
 - **多后端**：支持任何 OpenAI 兼容 API（DeepSeek、OpenAI、Ollama 等）
 - **多轮对话**：TUI 模式保留完整对话历史
 
-> 📋 计划中：SQLite 持久化。详见 [TODO.md](TODO.md)。
+> 📋 计划中：Phase 6 角色间互动、Phase 7 体验优化、Phase 8 高级功能。详见 [TODO.md](TODO.md)。
 
 ## 快速开始
 

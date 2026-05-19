@@ -49,16 +49,14 @@
 
 ## Phase 5：持久化（SQLite）
 
-- [ ] 数据库 schema（`db/schema.rs`）
-  - conversations 表、messages 表
-  - characters 表（角色状态快照）
-  - lorebook_entries 表
-- [ ] CRUD 操作（`db/store.rs`）
+- [x] 数据库 schema（`db/schema.rs`）
+  - sessions 表、messages 表
+- [x] CRUD 操作（`db/store.rs`）
   - 对话保存/加载
-  - 角色状态读写
-- [ ] 会话管理
+  - 会话查询
+- [x] 会话管理
   - `--new-session` 开始新对话
-  - `--list-sessions` 查看历史会话
+  - `--ls` 查看历史会话
   - `--resume <id>` 恢复历史会话
 - [ ] 自动保存（每 N 轮触发）
 

@@ -13,6 +13,10 @@ pub enum Command {
     Clear,
     /// `/switch <name>` — switch to another character
     Switch(String),
+    /// `/save` — save current session
+    Save,
+    /// `/load <id>` — load a saved session
+    Load(String),
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -36,6 +40,8 @@ pub fn parse(input: &str) -> (Command, String) {
             "help" | "h" => (Command::Help, String::new()),
             "clear" | "cls" => (Command::Clear, String::new()),
             "switch" | "sw" => (Command::Switch(_args.trim().to_string()), String::new()),
+            "save" | "s" => (Command::Save, String::new()),
+            "load" | "l" => (Command::Load(_args.trim().to_string()), String::new()),
             _ => (Command::None, input.to_string()),
         };
     }

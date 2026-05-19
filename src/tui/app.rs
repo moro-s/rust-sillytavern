@@ -2,6 +2,7 @@ use crate::character::manager::CharacterManager;
 use crate::command;
 use crate::config;
 use crate::conversation;
+use crate::db;
 use crate::llm;
 use crate::llm::StreamEvent;
 use crate::lorebook;
@@ -10,6 +11,7 @@ use crate::tui::ui;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
+use rusqlite::Connection;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -22,6 +24,9 @@ pub struct Message {
 pub struct App {
     pub manager: CharacterManager,
     pub lore_manager: lorebook::entry::LoreManager,
+    pub db: Option<Connection>,
+    pub session_id: i64,
+    pub save_counter: usize,
     pub input: String,
     pub cursor_pos: usize,
     pub loading: bool,
@@ -31,21 +36,106 @@ pub struct App {
     pub streaming: String,
     pub is_streaming: bool,
     pub cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
+    pub should_quit: bool,
+}
+
+fn now_str() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    // Simple HH:MM format within the day
+    let mins = (secs / 60) % 60;
+    let hours = (secs / 3600 + 8) % 24; // UTC+8
+    format!("{:02}:{:02}", hours, mins)
 }
 
 impl App {
-    pub fn new(character_name: &str, _world: Option<&str>) -> anyhow::Result<Self> {
-        let manager = CharacterManager::load_all(character_name)?;
+    pub fn new(
+        character_name: &str,
+        _world: Option<&str>,
+        resume_id: Option<i64>,
+        new_session: bool,
+    ) -> anyhow::Result<Self> {
+        let mut manager = CharacterManager::load_all(character_name)?;
         let mut lore_manager = lorebook::entry::LoreManager::new();
-        // Load from lorebooks/ first
         lore_manager.load("lorebooks");
-        // Then try worlds/
         if std::path::Path::new("worlds").exists() {
             lore_manager.load("worlds");
         }
+
+        // Open database
+        let (db, session_id, save_counter) = match db::schema::open() {
+            Ok(conn) => {
+                let sid = if let Some(id) = resume_id {
+                    // Resume specific session
+                    match db::store::get_session(&conn, id) {
+                        Ok(Some(_)) => {
+                            match db::store::load_messages(&conn, id) {
+                                Ok(msgs) => {
+                                    // Inject loaded messages into manager
+                                    // ... handled after construction
+                                    Some((id, msgs))
+                                }
+                                Err(_) => Some((0, vec![])),
+                            }
+                        }
+                        _ => Some((0, vec![])),
+                    }
+                } else if new_session {
+                    None // Start fresh
+                } else {
+                    // Auto-resume last session for this character
+                    match db::store::list_sessions(&conn) {
+                        Ok(sessions) => {
+                            let last = sessions.iter()
+                                .find(|s| s.character_name == character_name);
+                            match last {
+                                Some(s) => match db::store::load_messages(&conn, s.id) {
+                                    Ok(msgs) => Some((s.id, msgs)),
+                                    Err(_) => None,
+                                },
+                                None => None,
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                };
+
+                match sid {
+                    Some((id, loaded_msgs)) => {
+                        if !loaded_msgs.is_empty() {
+                            // Load messages into active character
+                            let active = manager.active_name().to_string();
+                            if let Some(state) = manager.characters.get_mut(&active) {
+                                state.messages = loaded_msgs;
+                            }
+                        }
+                        (Some(conn), id, 0)
+                    }
+                    None => {
+                        // Create new session
+                        let world = _world.unwrap_or("");
+                        let name = format!("{} - {}", character_name, now_str());
+                        let sid = db::store::create_session(
+                            &conn,
+                            &name,
+                            character_name,
+                            if world.is_empty() { None } else { Some(world) },
+                        ).unwrap_or(0);
+                        (Some(conn), sid, 0)
+                    }
+                }
+            }
+            Err(_) => (None, 0, 0),
+        };
+
         Ok(Self {
             manager,
             lore_manager,
+            db,
+            session_id,
+            save_counter,
             input: String::new(),
             cursor_pos: 0,
             loading: false,
@@ -55,6 +145,7 @@ impl App {
             streaming: String::new(),
             is_streaming: false,
             cancel_tx: None,
+            should_quit: false,
         })
     }
 
@@ -66,7 +157,8 @@ impl App {
         let (cmd, content) = command::parser::parse(&input_text);
         match cmd {
             command::parser::Command::Quit => {
-                // handled by caller via break
+                self.save_current();
+                self.should_quit = true;
                 return;
             }
             command::parser::Command::Help => {
@@ -92,6 +184,14 @@ impl App {
                 } else if !name.is_empty() {
                     self.error = Some(format!("角色 '{}' 不存在", name));
                 }
+                return;
+            }
+            command::parser::Command::Save => {
+                self.save_current();
+                return;
+            }
+            command::parser::Command::Load(id_str) => {
+                self.load_session(&id_str);
                 return;
             }
             command::parser::Command::Info(name) => {
@@ -144,6 +244,7 @@ impl App {
             role: "user".into(),
             content: expanded,
         });
+        self.save_counter += 1;
         self.loading = true;
         self.is_streaming = true;
         self.streaming.clear();
@@ -212,9 +313,67 @@ impl App {
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
     }
+
+    pub fn save_current(&mut self) {
+        if let Some(ref conn) = self.db {
+            let msgs = &self.manager.active().messages;
+            match db::store::save_messages(conn, self.session_id, msgs) {
+                Ok(()) => {
+                    self.save_counter = 0;
+                    self.error = Some("已保存".into());
+                }
+                Err(e) => {
+                    self.error = Some(format!("保存失败: {}", e));
+                }
+            }
+        } else {
+            self.error = Some("数据库未初始化".into());
+        }
+    }
+
+    pub fn load_session(&mut self, id_str: &str) {
+        let id_str = id_str.trim();
+        if let Some(ref conn) = self.db {
+            match id_str.parse::<i64>() {
+                Ok(id) => {
+                    match db::store::load_messages(conn, id) {
+                        Ok(msgs) => {
+                            if !msgs.is_empty() {
+                                self.manager.active_mut().messages = msgs;
+                                self.session_id = id;
+                                self.save_counter = 0;
+                                self.scroll_offset = 0;
+                                self.error = Some(format!("已加载会话 {}", id));
+                            } else {
+                                self.error = Some(format!("会话 {} 无消息", id));
+                            }
+                        }
+                        Err(e) => self.error = Some(format!("加载失败: {}", e)),
+                    }
+                }
+                Err(_) => self.error = Some(format!("无效的会话 ID: {}", id_str)),
+            }
+        }
+    }
+
+    pub fn try_autosave(&mut self) {
+        if self.save_counter >= 3 {
+            if let Some(ref conn) = self.db {
+                let msgs = &self.manager.active().messages;
+                if db::store::save_messages(conn, self.session_id, msgs).is_ok() {
+                    self.save_counter = 0;
+                }
+            }
+        }
+    }
 }
 
-pub async fn run(character: Option<String>, world: Option<String>) -> anyhow::Result<()> {
+pub async fn run(
+    character: Option<String>,
+    world: Option<String>,
+    resume_id: Option<i64>,
+    new_session: bool,
+) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
 
     let (char_name, world_name) = if let Some(name) = character {
@@ -224,13 +383,7 @@ pub async fn run(character: Option<String>, world: Option<String>) -> anyhow::Re
         (name, w)
     };
 
-    if let Some(ref wname) = world_name {
-        if !wname.is_empty() {
-            println!("[世界: {}] (已激活)", wname);
-        }
-    }
-
-    let result = run_app(&mut terminal, &char_name, world_name.as_deref()).await;
+    let result = run_app(&mut terminal, &char_name, world_name.as_deref(), resume_id, new_session).await;
     ratatui::restore();
     result
 }
@@ -240,8 +393,14 @@ enum AppEvent {
     NonStream(anyhow::Result<String>),
 }
 
-async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Option<&str>) -> anyhow::Result<()> {
-    let mut app = App::new(character_name, world)?;
+async fn run_app(
+    terminal: &mut DefaultTerminal,
+    character_name: &str,
+    world: Option<&str>,
+    resume_id: Option<i64>,
+    new_session: bool,
+) -> anyhow::Result<()> {
+    let mut app = App::new(character_name, world, resume_id, new_session)?;
     let cfg = config::load()?;
     let use_stream = cfg.llm.stream;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
@@ -311,6 +470,11 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                                 continue;
                             }
                             let trimmed = app.input.trim();
+                            if trimmed == "/exit" || trimmed == "/quit" {
+                                app.save_current();
+                                break;
+                            }
+                            let trimmed = app.input.trim();
                             // Legacy /exit /quit (also handled by command parser)
                             if trimmed == "/exit" || trimmed == "/quit" {
                                 break;
@@ -319,7 +483,9 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                                 continue;
                             }
                             app.send_message();
-
+                            if app.should_quit {
+                                break;
+                            }
                         let system_prompt = app.manager.active().system_prompt.clone();
                         let llm_config = cfg.llm.clone();
 
@@ -451,6 +617,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                     app.loading = false;
                     app.is_streaming = false;
                     app.cancel_tx = None;
+                    app.try_autosave();
                 }
                 AppEvent::Stream(StreamEvent::Error(msg)) => {
                     app.error = Some(msg);
@@ -467,6 +634,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                     app.loading = false;
                     app.is_streaming = false;
                     app.cancel_tx = None;
+                    app.try_autosave();
                 }
                 AppEvent::NonStream(Err(e)) => {
                     app.error = Some(format!("{:#}", e));
