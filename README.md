@@ -41,17 +41,18 @@ stream = true   # 流式输出（逐字显示）
 ### 运行
 
 ```bash
-# TUI 交互模式（默认）
+# TUI 交互模式（无参数 → 启动角色/世界选择器）
 cargo run
 
 # 指定角色进入 TUI
 cargo run -- -c mage
 
-# 指定世界（预留）
-cargo run -- -w faerun -c innkeeper
+# 指定角色 + 世界
+cargo run -- -c innkeeper -w faerun
 
-# CLI 单次对话模式
+# CLI 单次对话
 cargo run -- -m "来杯麦酒"
+cargo run -- -c mage -m "教我火球术"
 
 # 列出可用角色 / 世界
 cargo run -- --cl

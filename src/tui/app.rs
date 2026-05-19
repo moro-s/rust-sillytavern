@@ -2,6 +2,7 @@ use crate::character;
 use crate::config;
 use crate::llm;
 use crate::llm::StreamEvent;
+use crate::tui::selector;
 use crate::tui::ui;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -140,9 +141,23 @@ impl App {
     }
 }
 
-pub async fn run(character_name: &str) -> anyhow::Result<()> {
+pub async fn run(character: Option<String>, _world: Option<String>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run_app(&mut terminal, character_name).await;
+
+    // If no character specified, show selector first
+    let char_name = if let Some(name) = character {
+        name
+    } else {
+        let (name, world_selected) = selector::run(&mut terminal)?;
+        if let Some(ref wname) = world_selected {
+            if !wname.is_empty() {
+                println!("[世界: {}] (功能预留)", wname);
+            }
+        }
+        name
+    };
+
+    let result = run_app(&mut terminal, &char_name).await;
     ratatui::restore();
     result
 }
