@@ -6,12 +6,14 @@ use crate::db;
 use crate::llm;
 use crate::llm::StreamEvent;
 use crate::lorebook;
+use crate::state;
 use crate::tui::selector;
 use crate::tui::ui;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -206,6 +208,10 @@ impl App {
             }
             command::parser::Command::SetSelf(text) => {
                 self.handle_set_self(&text);
+                return;
+            }
+            command::parser::Command::ManageState(args) => {
+                self.handle_manage_state(&args);
                 return;
             }
             command::parser::Command::Info(name) => {
@@ -462,6 +468,33 @@ impl App {
         Self::save_self_persona(text);
         self.error = Some(format!("用户设定已更新: {}", text));
     }
+
+    /// Parse and execute a `/state` command
+    /// Format: action category key [data...]
+    pub fn handle_manage_state(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(4, ' ').collect();
+        let action = parts.first().map(|s| *s).unwrap_or("get");
+        let category = parts.get(1).map(|s| *s).unwrap_or("item");
+        let key = parts.get(2).map(|s| *s).unwrap_or("");
+        let data_str = parts.get(3).map(|s| *s).unwrap_or("");
+
+        let data: HashMap<String, serde_json::Value> = if !data_str.is_empty() {
+            serde_json::from_str(data_str).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        let name = self.manager.active_name().to_string();
+        let state = &mut self.manager.active_mut().state;
+        let result = state::manage(state, action, category, key, &data);
+
+        // Save state file
+        let state_path = format!("characters/{}.state.md", name);
+        if let Err(e) = state::save(&state, &state_path) {
+            self.error = Some(format!("保存状态失败: {}", e));
+        }
+        self.error = Some(result);
+    }
 }
 
 pub async fn run(
@@ -583,11 +616,19 @@ async fn run_app(
                                 break;
                             }
                         let mut system_prompt = app.manager.active().system_prompt.clone();
-                        // Inject user persona if set
+                        // Inject user persona
                         if !app.self_persona.is_empty() {
                             system_prompt.push_str(&format!(
                                 "\n\n【当前对话对象的设定】\n{}",
                                 app.self_persona
+                            ));
+                        }
+                        // Inject character state summary
+                        let state_summary = state::summary(&app.manager.active().state);
+                        if !state_summary.is_empty() {
+                            system_prompt.push_str(&format!(
+                                "\n\n【当前角色动态状态】\n{}",
+                                state_summary
                             ));
                         }
                         let llm_config = cfg.llm.clone();

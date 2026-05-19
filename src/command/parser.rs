@@ -23,6 +23,8 @@ pub enum Command {
     CreateWorld(String),
     /// `/self <text>` — set user persona
     SetSelf(String),
+    /// `/state <query>` — manage character state
+    ManageState(String),
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -51,6 +53,7 @@ pub fn parse(input: &str) -> (Command, String) {
             "cc" => (Command::CreateChar(_args.trim().to_string()), String::new()),
             "cw" => (Command::CreateWorld(_args.trim().to_string()), String::new()),
             "self" => (Command::SetSelf(_args.trim().to_string()), String::new()),
+            "state" => (Command::ManageState(_args.trim().to_string()), String::new()),
             _ => (Command::None, input.to_string()),
         };
     }

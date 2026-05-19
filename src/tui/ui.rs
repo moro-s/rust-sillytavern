@@ -251,6 +251,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("/cc <name> - 创建角色卡"),
         Line::from("/cw <name> - 创建世界词条"),
         Line::from("/self <text> - 设置用户本人的设定"),
+        Line::from("/state <cmd> - 管理角色状态 (add/get item/event/skill/status)"),
         Line::from("/switch X  - 切换到角色 X"),
         Line::from("/help      - 显示帮助"),
         Line::from("?X         - 查看角色 X 的信息"),

@@ -1,4 +1,5 @@
 use crate::character::{build_system_prompt, load as load_card, CharacterCard};
+use crate::state;
 use crate::tui::app::Message;
 use std::collections::HashMap;
 
@@ -7,6 +8,7 @@ pub struct CharacterState {
     pub card: CharacterCard,
     pub system_prompt: String,
     pub messages: Vec<Message>,
+    pub state: state::CharacterState,
 }
 
 pub struct CharacterManager {
@@ -37,10 +39,24 @@ impl CharacterManager {
                                         content: card.meta.first_message.clone(),
                                     });
                                 }
+                                // Load character state
+                                let state_path = format!("worlds/{}/characters/{stem}.state.md", 
+                                    std::env::var("WORLD").unwrap_or_default());
+                                let state = if std::path::Path::new(&state_path).exists() {
+                                    state::load(&state_path)
+                                } else {
+                                    let char_state_path = format!("characters/{stem}.state.md");
+                                    if std::path::Path::new(&char_state_path).exists() {
+                                        state::load(&char_state_path)
+                                    } else {
+                                        state::CharacterState::default()
+                                    }
+                                };
                                 characters.insert(stem.to_string(), CharacterState {
                                     card,
                                     system_prompt,
                                     messages,
+                                    state,
                                 });
                                 order.push(stem.to_string());
                             }
