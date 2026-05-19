@@ -37,6 +37,7 @@ pub struct App {
     pub is_streaming: bool,
     pub cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
     pub should_quit: bool,
+    pub self_persona: String,
 }
 
 fn now_str() -> String {
@@ -146,6 +147,7 @@ impl App {
             is_streaming: false,
             cancel_tx: None,
             should_quit: false,
+            self_persona: Self::load_self_persona(),
         })
     }
 
@@ -192,6 +194,18 @@ impl App {
             }
             command::parser::Command::Load(id_str) => {
                 self.load_session(&id_str);
+                return;
+            }
+            command::parser::Command::CreateChar(name) => {
+                self.handle_create_char(&name);
+                return;
+            }
+            command::parser::Command::CreateWorld(name) => {
+                self.handle_create_world(&name);
+                return;
+            }
+            command::parser::Command::SetSelf(text) => {
+                self.handle_set_self(&text);
                 return;
             }
             command::parser::Command::Info(name) => {
@@ -366,6 +380,88 @@ impl App {
             }
         }
     }
+
+    fn load_self_persona() -> String {
+        std::fs::read_to_string("data/self.txt").unwrap_or_default()
+    }
+
+    fn save_self_persona(text: &str) {
+        let _ = std::fs::create_dir_all("data");
+        let _ = std::fs::write("data/self.txt", text);
+    }
+
+    pub fn handle_create_char(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.error = Some("用法: /cc <角色名>".into());
+            return;
+        }
+        let path = format!("characters/{}.md", name);
+        if std::path::Path::new(&path).exists() {
+            self.error = Some(format!("角色 '{}' 已存在", name));
+            return;
+        }
+        let template = format!(
+            "---\nname: {name}\npersonality: \nspeech_style: \nfirst_message: \n---\n\n# 背景\n\n# 外貌\n\n# 我知道的事情\n- \n",
+            name = name
+        );
+        match std::fs::write(&path, &template) {
+            Ok(()) => {
+                // Reload character manager
+                let active = self.manager.active_name().to_string();
+                if let Ok(new_manager) = CharacterManager::load_all(&active) {
+                    self.manager = new_manager;
+                }
+                self.error = Some(format!("角色 '{}' 已创建，请编辑 {}.md", name, name));
+            }
+            Err(e) => {
+                self.error = Some(format!("创建失败: {}", e));
+            }
+        }
+    }
+
+    pub fn handle_create_world(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.error = Some("用法: /cw <世界名>".into());
+            return;
+        }
+        let path = format!("lorebooks/{}.toml", name);
+        if std::path::Path::new(&path).exists() {
+            self.error = Some(format!("世界 '{}' 已存在", name));
+            return;
+        }
+        let template = format!(
+            "key = \"{name}\"\ntriggers = [\"\", \"\"]\ncontent = \"\"\"\n\n\"\"\"\npriority = 5\n",
+            name = name
+        );
+        let _ = std::fs::create_dir_all("lorebooks");
+        match std::fs::write(&path, &template) {
+            Ok(()) => {
+                self.lore_manager.load("lorebooks");
+                self.error = Some(format!("世界 '{}' 已创建，请编辑 {}.toml", name, name));
+            }
+            Err(e) => {
+                self.error = Some(format!("创建失败: {}", e));
+            }
+        }
+    }
+
+    pub fn handle_set_self(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            let current = if self.self_persona.is_empty() {
+                "未设置".to_string()
+            } else {
+                format!("当前设定: {}", self.self_persona)
+            };
+            self.error = Some(format!("用法: /self <你的设定>\n{}", current));
+            return;
+        }
+        self.self_persona = text.to_string();
+        Self::save_self_persona(text);
+        self.error = Some(format!("用户设定已更新: {}", text));
+    }
 }
 
 pub async fn run(
@@ -486,7 +582,14 @@ async fn run_app(
                             if app.should_quit {
                                 break;
                             }
-                        let system_prompt = app.manager.active().system_prompt.clone();
+                        let mut system_prompt = app.manager.active().system_prompt.clone();
+                        // Inject user persona if set
+                        if !app.self_persona.is_empty() {
+                            system_prompt.push_str(&format!(
+                                "\n\n【当前对话对象的设定】\n{}",
+                                app.self_persona
+                            ));
+                        }
                         let llm_config = cfg.llm.clone();
 
                         // Scan for lorebook triggers

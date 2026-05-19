@@ -17,6 +17,12 @@ pub enum Command {
     Save,
     /// `/load <id>` — load a saved session
     Load(String),
+    /// `/cc <name>` — create character card
+    CreateChar(String),
+    /// `/cw <name>` — create world entry
+    CreateWorld(String),
+    /// `/self <text>` — set user persona
+    SetSelf(String),
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -42,6 +48,9 @@ pub fn parse(input: &str) -> (Command, String) {
             "switch" | "sw" => (Command::Switch(_args.trim().to_string()), String::new()),
             "save" | "s" => (Command::Save, String::new()),
             "load" | "l" => (Command::Load(_args.trim().to_string()), String::new()),
+            "cc" => (Command::CreateChar(_args.trim().to_string()), String::new()),
+            "cw" => (Command::CreateWorld(_args.trim().to_string()), String::new()),
+            "self" => (Command::SetSelf(_args.trim().to_string()), String::new()),
             _ => (Command::None, input.to_string()),
         };
     }
