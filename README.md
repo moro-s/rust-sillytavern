@@ -7,10 +7,11 @@ AI 角色扮演酒馆 —— 终端里的沉浸式角色扮演体验。受 [Sill
 - **角色卡系统**：Markdown + YAML 头信息定义角色（名字、性格、说话风格、背景知识）
 - **终端 UI（TUI）**：ratatui 驱动的全屏交互界面，聊天面板 + 输入栏 + 着色
 - **CLI 模式**：命令行快速对话，适合脚本和测试
+- **流式输出**：SSE 逐 token 接收，TUI 打字机效果，CLI 即时打印
 - **多后端**：支持任何 OpenAI 兼容 API（DeepSeek、OpenAI、Ollama 等）
 - **多轮对话**：TUI 模式保留完整对话历史
 
-> 📋 计划中：多角色切换、Lorebook 世界信息、SQLite 持久化、流式输出。详见 [TODO.md](TODO.md)。
+> 📋 计划中：多角色切换 / `@角色名` 引用、`/` `?` 命令系统、Lorebook 世界信息、SQLite 持久化。详见 [TODO.md](TODO.md)。
 
 ## 快速开始
 
@@ -28,11 +29,13 @@ AI 角色扮演酒馆 —— 终端里的沉浸式角色扮演体验。受 [Sill
 base_url = "https://api.deepseek.com/v1"
 api_key = "sk-your-key-here"
 model = "deepseek-chat"
+stream = true   # 流式输出（逐字显示）
 
 # 或 Ollama 本地模型
 # base_url = "http://localhost:11434/v1"
 # api_key = "ollama"
 # model = "qwen2.5:7b"
+# stream = true
 ```
 
 ### 运行
@@ -63,6 +66,14 @@ cargo run -- -c mage -m "教我火球术"
 | `Esc` | 跳转到最新消息 |
 | `←` / `→` | 移动输入光标 |
 | `Home` / `End` | 光标跳到行首/行尾 |
+
+### 命令系统（计划）
+
+| 前缀 | 用途 | 示例 |
+|------|------|------|
+| `@` | 在多角色对话中引用其他角色 | `@流浪剑客 你怎么看？` |
+| `/` | 系统命令 | `/help` `/clear` `/save` `/load` `/quit` |
+| `?` | 查询角色/系统信息 | `?流浪剑客` `?list` `?help` |
 
 ## 角色卡格式
 
