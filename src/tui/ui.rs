@@ -129,7 +129,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let title = if app.loading {
         " 输入 (思考中...) "
     } else {
-        " 输入 (Enter 发送, Ctrl+C 复制, Ctrl+V 粘贴, Ctrl+Q 退出, F1 帮助) "
+        " 输入 (Enter 发送, Ctrl+C 复制, Ctrl+V 粘贴, /exit 退出, F1 帮助) "
     };
 
     let block = Block::default()
@@ -191,7 +191,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from("Enter      - 发送消息"),
         Line::from("Ctrl+C     - 复制输入框内容"),
         Line::from("Ctrl+V     - 粘贴剪贴板内容"),
-        Line::from("Ctrl+Q     - 退出程序"),
+        Line::from("/exit /quit - 退出程序"),
         Line::from("F1         - 显示/隐藏帮助"),
         Line::from("↑ / ↓      - 向上/向下滚动聊天记录"),
         Line::from("PgUp/PgDn  - 快速滚动"),

@@ -196,53 +196,59 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                             }
                         }
                     }
-                    KeyCode::Char('q') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                        break;
-                    }
                     KeyCode::F(1) => {
                         app.show_help = true;
                     }
                     KeyCode::Enter => {
-                        if !app.loading && !app.input.is_empty() {
-                            app.send_message();
+                        if app.loading {
+                            continue;
+                        }
+                        let trimmed = app.input.trim();
+                        // Commands
+                        if trimmed == "/exit" || trimmed == "/quit" {
+                            break;
+                        }
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        app.send_message();
 
-                            let system_prompt = app.system_prompt.clone();
-                            let llm_config = cfg.llm.clone();
-                            let history: Vec<_> = app.messages.iter()
-                                .filter(|m| m.role != "system")
-                                .map(|m| llm::ChatMessage {
-                                    role: m.role.clone(),
-                                    content: m.content.clone(),
-                                })
-                                .collect();
+                        let system_prompt = app.system_prompt.clone();
+                        let llm_config = cfg.llm.clone();
+                        let history: Vec<_> = app.messages.iter()
+                            .filter(|m| m.role != "system")
+                            .map(|m| llm::ChatMessage {
+                                role: m.role.clone(),
+                                content: m.content.clone(),
+                            })
+                            .collect();
 
-                            let all_messages = {
-                                let mut msgs = vec![
-                                    llm::ChatMessage {
-                                        role: "system".into(),
-                                        content: system_prompt,
-                                    },
-                                ];
-                                let recent = history.iter().rev().take(20).rev();
-                                msgs.extend(recent.cloned());
-                                msgs
-                            };
+                        let all_messages = {
+                            let mut msgs = vec![
+                                llm::ChatMessage {
+                                    role: "system".into(),
+                                    content: system_prompt,
+                                },
+                            ];
+                            let recent = history.iter().rev().take(20).rev();
+                            msgs.extend(recent.cloned());
+                            msgs
+                        };
 
-                            if use_stream {
-                                let mut stream_rx = llm::chat_stream(llm_config, all_messages);
-                                let tx = tx.clone();
-                                tokio::spawn(async move {
-                                    while let Some(event) = stream_rx.recv().await {
-                                        let _ = tx.send(AppEvent::Stream(event));
-                                    }
-                                });
-                            } else {
-                                let tx = tx.clone();
-                                tokio::spawn(async move {
-                                    let result = llm::chat_with_messages(&llm_config, &all_messages).await;
-                                    let _ = tx.send(AppEvent::NonStream(result));
-                                });
-                            }
+                        if use_stream {
+                            let mut stream_rx = llm::chat_stream(llm_config, all_messages);
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                while let Some(event) = stream_rx.recv().await {
+                                    let _ = tx.send(AppEvent::Stream(event));
+                                }
+                            });
+                        } else {
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                let result = llm::chat_with_messages(&llm_config, &all_messages).await;
+                                let _ = tx.send(AppEvent::NonStream(result));
+                            });
                         }
                     }
                     KeyCode::Char(c) => {
