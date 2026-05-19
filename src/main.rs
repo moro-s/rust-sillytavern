@@ -1,4 +1,5 @@
 mod character;
+mod command;
 mod config;
 mod llm;
 mod tui;

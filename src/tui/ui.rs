@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -15,42 +15,86 @@ pub fn draw(f: &mut Frame, app: &App) {
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
+    // Main layout: sidebar | chat+input+status
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Min(1),    // Chat area
-            Constraint::Length(3), // Input area
-            Constraint::Length(1), // Status bar
+            Constraint::Length(20), // sidebar
+            Constraint::Min(1),     // chat area
         ])
         .split(area);
 
-    draw_chat(f, chunks[0], app);
-    draw_input(f, chunks[1], app);
-    draw_status(f, chunks[2], app);
+    draw_sidebar(f, main_chunks[0], app);
+
+    let right = main_chunks[1];
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // chat
+            Constraint::Length(3), // input
+            Constraint::Length(1), // status
+        ])
+        .split(right);
+
+    draw_chat(f, right_chunks[0], app);
+    draw_input(f, right_chunks[1], app);
+    draw_status(f, right_chunks[2], app);
+}
+
+fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .title(" 角色 ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let items: Vec<ListItem> = app.manager.order.iter()
+        .enumerate()
+        .map(|(i, name)| {
+            if i == app.manager.active_index {
+                ListItem::new(Line::from(vec![
+                    Span::styled(" ▶ ", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        name.clone(),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+            } else {
+                ListItem::new(Line::from(vec![
+                    Span::raw("   "),
+                    Span::styled(name.clone(), Style::default().fg(Color::DarkGray)),
+                ]))
+            }
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(block);
+
+    f.render_widget(list, area);
 }
 
 fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
-        .title(format!(" {} ", app.character_name))
+        .title(format!(" {} ", app.character_name()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let mut lines: Vec<Line> = app
-        .messages
+    let mut lines: Vec<Line> = app.manager.active().messages
         .iter()
-        .flat_map(|msg| render_message(msg, &app.character_name))
+        .flat_map(|msg| render_message(msg, app.character_name()))
         .collect();
 
-    // Show streaming content with a cursor indicator
     if app.is_streaming && !app.streaming.is_empty() {
         let header = Line::from(vec![
             Span::styled(
-                format!("[{}] ", app.character_name),
+                format!("[{}] ", app.character_name()),
                 Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
             ),
         ]);
         lines.push(header);
-
         let content_with_cursor = format!("{}▌", app.streaming);
         for content_line in content_with_cursor.lines() {
             lines.push(Line::from(Span::styled(
@@ -60,11 +104,7 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
         }
         lines.push(Line::from(""));
     } else if app.is_streaming {
-        // Streaming but no content yet — show thinking indicator
-        lines.push(Line::from(Span::styled(
-            "▌",
-            Style::default().fg(Color::Magenta),
-        )));
+        lines.push(Line::from(Span::styled("▌", Style::default().fg(Color::Magenta))));
         lines.push(Line::from(""));
     }
 
@@ -97,6 +137,10 @@ fn render_message<'a>(msg: &'a Message, char_name: &'a str) -> Vec<Line<'a>> {
             Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
             Style::default().fg(Color::Gray),
         ),
+        "system" => (
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::DarkGray),
+        ),
         _ => (
             Style::default().fg(Color::Yellow),
             Style::default().fg(Color::White),
@@ -106,6 +150,7 @@ fn render_message<'a>(msg: &'a Message, char_name: &'a str) -> Vec<Line<'a>> {
     let role_name = match msg.role.as_str() {
         "user" => "你",
         "assistant" => char_name,
+        "system" => "系统",
         other => other,
     };
 
@@ -113,8 +158,7 @@ fn render_message<'a>(msg: &'a Message, char_name: &'a str) -> Vec<Line<'a>> {
         Span::styled(format!("[{}] ", role_name), header_style),
     ]);
 
-    let body_lines: Vec<Line> = msg
-        .content
+    let body_lines: Vec<Line> = msg.content
         .lines()
         .map(|l| Line::from(Span::styled(l.to_string(), content_style)))
         .collect();
@@ -129,7 +173,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let title = if app.loading {
         " 输入 (思考中...) "
     } else {
-                " 输入 (Enter 发送, Esc 打断, Ctrl+C/V 复制粘贴, F1 帮助) "
+        " 输入 (Enter/Tab, Esc打断, Ctrl+C/V, F1, ?list帮助) "
     };
 
     let block = Block::default()
@@ -149,12 +193,9 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 
     f.render_widget(input_paragraph, area);
 
-    // Show cursor
     if !app.loading {
-        // Calculate visual cursor position (CJK chars = 2 cells)
-        let prefix_width = 2u16; // "> "
-        let visual_pos: u16 = app.input
-            .chars()
+        let prefix_width = 2u16;
+        let visual_pos: u16 = app.input.chars()
             .take(app.cursor_pos)
             .map(|c| if is_wide(c) { 2u16 } else { 1u16 })
             .sum();
@@ -172,10 +213,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" 等待回复... ", Style::default().fg(Color::Yellow))
     } else {
         Span::styled(
-            format!(
-                " {} 条消息 | ↑↓ 滚动 | Esc 回到底部 ",
-                app.messages.len()
-            ),
+            format!(" {} 条消息 | ↑↓滚动 | Esc回到底部 | Tab切换角色 ", app.manager.active().messages.len()),
             Style::default().fg(Color::DarkGray),
         )
     };
@@ -186,18 +224,26 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_help(f: &mut Frame, area: Rect) {
     let help_text = vec![
-        Line::from(Span::styled("快捷键帮助", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("快捷键 & 命令帮助", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
         Line::from(""),
         Line::from("Enter      - 发送消息"),
+        Line::from("Tab        - 切换到下一个角色"),
+        Line::from("Shift+Tab  - 切换到上一个角色"),
         Line::from("Ctrl+C     - 复制输入框内容"),
         Line::from("Ctrl+V     - 粘贴剪贴板内容"),
-        Line::from("/exit /quit - 退出程序"),
         Line::from("F1         - 显示/隐藏帮助"),
-        Line::from("↑ / ↓      - 向上/向下滚动聊天记录"),
-        Line::from("PgUp/PgDn  - 快速滚动"),
         Line::from("Esc        - 打断回复 / 跳转到最新消息"),
-        Line::from("← / →      - 移动光标"),
-        Line::from("Home/End   - 光标跳到行首/行尾"),
+        Line::from("↑ / ↓      - 滚动聊天记录"),
+        Line::from("PgUp/PgDn  - 快速滚动"),
+        Line::from(""),
+        Line::from(Span::styled("命令:", Style::default().fg(Color::Cyan))),
+        Line::from("/exit      - 退出程序"),
+        Line::from("/clear     - 清除当前角色对话"),
+        Line::from("/switch X  - 切换到角色 X"),
+        Line::from("/help      - 显示帮助"),
+        Line::from("?X         - 查看角色 X 的信息"),
+        Line::from("?list      - 列出所有角色"),
+        Line::from("@X         - 在消息中引用角色 X"),
         Line::from(""),
         Line::from(Span::styled("按任意键关闭帮助", Style::default().fg(Color::DarkGray))),
     ];
@@ -210,7 +256,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         .block(block)
         .centered();
 
-    let popup_area = centered_rect(40, 60, area);
+    let popup_area = centered_rect(50, 70, area);
     f.render_widget(Clear, popup_area);
     f.render_widget(paragraph, popup_area);
 }
@@ -218,29 +264,26 @@ fn draw_help(f: &mut Frame, area: Rect) {
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_width = (r.width * percent_x) / 100;
     let popup_height = (r.height * percent_y) / 100;
-
     let x = r.x + (r.width.saturating_sub(popup_width)) / 2;
     let y = r.y + (r.height.saturating_sub(popup_height)) / 2;
-
     Rect::new(x, y, popup_width.min(r.width), popup_height.min(r.height))
 }
 
-/// Check if a character occupies 2 terminal cells (CJK, fullwidth, etc.)
 fn is_wide(c: char) -> bool {
     matches!(
         c,
-        '\u{1100}'..='\u{115F}' |   // Hangul Jamo
-        '\u{2329}'..='\u{232A}' |   // Misc Technical
-        '\u{2E80}'..='\u{A4CF}' |   // CJK Radicals Supplement .. Yi
-        '\u{AC00}'..='\u{D7A3}' |   // Hangul Syllables
-        '\u{F900}'..='\u{FAFF}' |   // CJK Compatibility Ideographs
-        '\u{FE10}'..='\u{FE19}' |   // Vertical forms
-        '\u{FE30}'..='\u{FE6F}' |   // CJK Compatibility Forms
-        '\u{FF01}'..='\u{FF60}' |   // Fullwidth Forms
-        '\u{FFE0}'..='\u{FFE6}' |   // Fullwidth Signs
-        '\u{1F300}'..='\u{1F64F}' | // Misc Symbols, Emoticons
-        '\u{1F900}'..='\u{1F9FF}' | // Supplemental Symbols
-        '\u{20000}'..='\u{2FFFD}' | // CJK Unified Ideographs Extension B+
-        '\u{30000}'..='\u{3FFFD}'    // CJK Extension G+
+        '\u{1100}'..='\u{115F}'
+        | '\u{2329}'..='\u{232A}'
+        | '\u{2E80}'..='\u{A4CF}'
+        | '\u{AC00}'..='\u{D7A3}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{FE10}'..='\u{FE19}'
+        | '\u{FE30}'..='\u{FE6F}'
+        | '\u{FF01}'..='\u{FF60}'
+        | '\u{FFE0}'..='\u{FFE6}'
+        | '\u{1F300}'..='\u{1F64F}'
+        | '\u{1F900}'..='\u{1F9FF}'
+        | '\u{20000}'..='\u{2FFFD}'
+        | '\u{30000}'..='\u{3FFFD}'
     )
 }

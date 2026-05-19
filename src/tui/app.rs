@@ -1,4 +1,5 @@
-use crate::character;
+use crate::character::manager::CharacterManager;
+use crate::command;
 use crate::config;
 use crate::llm;
 use crate::llm::StreamEvent;
@@ -17,40 +18,23 @@ pub struct Message {
 }
 
 pub struct App {
-    pub character_name: String,
-    pub system_prompt: String,
-    pub messages: Vec<Message>,
+    pub manager: CharacterManager,
     pub input: String,
     pub cursor_pos: usize,
     pub loading: bool,
     pub scroll_offset: usize,
     pub error: Option<String>,
     pub show_help: bool,
-    /// Accumulated streaming content (not yet committed to messages)
     pub streaming: String,
-    /// Whether we're in streaming mode
     pub is_streaming: bool,
-    /// Cancel sender for the current LLM request
     pub cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl App {
     pub fn new(character_name: &str) -> anyhow::Result<Self> {
-        let card = character::load(character_name)?;
-        let system_prompt = character::build_system_prompt(&card);
-
-        let mut messages = Vec::new();
-        if !card.meta.first_message.is_empty() {
-            messages.push(Message {
-                role: "assistant".into(),
-                content: card.meta.first_message.clone(),
-            });
-        }
-
+        let manager = CharacterManager::load_all(character_name)?;
         Ok(Self {
-            character_name: card.meta.name,
-            system_prompt,
-            messages,
+            manager,
             input: String::new(),
             cursor_pos: 0,
             loading: false,
@@ -61,6 +45,105 @@ impl App {
             is_streaming: false,
             cancel_tx: None,
         })
+    }
+
+    fn send_message(&mut self) {
+        let input_text = std::mem::take(&mut self.input);
+        self.cursor_pos = 0;
+
+        // Command parsing
+        let (cmd, content) = command::parser::parse(&input_text);
+        match cmd {
+            command::parser::Command::Quit => {
+                // handled by caller via break
+                return;
+            }
+            command::parser::Command::Help => {
+                self.show_help = true;
+                return;
+            }
+            command::parser::Command::Clear => {
+                self.manager.active_mut().messages.clear();
+                let first = self.manager.active().card.meta.first_message.clone();
+                if !first.is_empty() {
+                    self.manager.active_mut().messages.push(Message {
+                        role: "assistant".into(),
+                        content: first,
+                    });
+                }
+                self.scroll_offset = 0;
+                return;
+            }
+            command::parser::Command::Switch(name) => {
+                let name = name.trim().to_string();
+                if !name.is_empty() && self.manager.switch_to_name(&name) {
+                    self.scroll_offset = 0;
+                } else if !name.is_empty() {
+                    self.error = Some(format!("角色 '{}' 不存在", name));
+                }
+                return;
+            }
+            command::parser::Command::Info(name) => {
+                let name = name.trim().to_string();
+                if let Some(card) = self.manager.lookup(&name) {
+                    let info = format!(
+                        "角色: {}\n性格: {}\n说话风格: {}\n{}",
+                        card.meta.name,
+                        card.meta.personality,
+                        card.meta.speech_style,
+                        card.body
+                    );
+                    // Show as system message in current character's chat
+                    self.manager.active_mut().messages.push(Message {
+                        role: "system".into(),
+                        content: info,
+                    });
+                } else {
+                    self.error = Some(format!("角色 '{}' 不存在", name));
+                }
+                return;
+            }
+            command::parser::Command::List => {
+                let list = self.manager.order.iter()
+                    .map(|n| format!("- {}", n))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.manager.active_mut().messages.push(Message {
+                    role: "system".into(),
+                    content: format!("可用角色:\n{}", list),
+                });
+                return;
+            }
+            command::parser::Command::None => {}
+        }
+
+        // Expand @mentions and send
+        let expanded = {
+            let manager = &self.manager;
+            command::parser::expand_mentions(&content, |name| {
+                manager.lookup(name).cloned()
+            })
+        };
+
+        if expanded.trim().is_empty() {
+            return;
+        }
+
+        self.manager.active_mut().messages.push(Message {
+            role: "user".into(),
+            content: expanded,
+        });
+        self.loading = true;
+        self.is_streaming = true;
+        self.streaming.clear();
+        self.error = None;
+        self.scroll_offset = 0;
+        let (cancel_tx, _) = tokio::sync::watch::channel(false);
+        self.cancel_tx = Some(cancel_tx);
+    }
+
+    pub fn character_name(&self) -> &str {
+        self.manager.active_name()
     }
 
     /// Convert char index to byte index
@@ -107,27 +190,6 @@ impl App {
         }
     }
 
-    fn send_message(&mut self) {
-        let input = std::mem::take(&mut self.input);
-        self.cursor_pos = 0;
-        if input.trim().is_empty() {
-            return;
-        }
-
-        self.messages.push(Message {
-            role: "user".into(),
-            content: input,
-        });
-        self.loading = true;
-        self.is_streaming = true;
-        self.streaming.clear();
-        self.error = None;
-        self.scroll_offset = 0;
-        // Create a new cancel token for this request
-        let (cancel_tx, _) = tokio::sync::watch::channel(false);
-        self.cancel_tx = Some(cancel_tx);
-    }
-
     pub fn scroll_up(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(amount);
     }
@@ -144,7 +206,6 @@ impl App {
 pub async fn run(character: Option<String>, _world: Option<String>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
 
-    // If no character specified, show selector first
     let char_name = if let Some(name) = character {
         name
     } else {
@@ -176,7 +237,6 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        // Poll for keyboard events
         if event::poll(Duration::from_millis(16))? {
             match event::read()? {
                 Event::Paste(text) => {
@@ -187,144 +247,151 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                     }
                 }
                 Event::Key(key) => {
-                if key.kind == KeyEventKind::Release {
-                    continue;
-                }
+                    if key.kind == KeyEventKind::Release {
+                        continue;
+                    }
 
-                if app.show_help {
-                    app.show_help = false;
-                    continue;
-                }
+                    if app.show_help {
+                        app.show_help = false;
+                        continue;
+                    }
 
-                match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                        // Ctrl+C: copy input to clipboard
-                        if !app.input.is_empty() {
-                            if let Ok(mut cb) = arboard::Clipboard::new() {
-                                let _ = cb.set_text(&app.input);
+                    match key.code {
+                        KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            if !app.input.is_empty() {
+                                if let Ok(mut cb) = arboard::Clipboard::new() {
+                                    let _ = cb.set_text(&app.input);
+                                }
                             }
                         }
-                    }
-                    KeyCode::Char('v') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                        // Ctrl+V: paste from clipboard
-                        if !app.loading {
-                            if let Ok(mut cb) = arboard::Clipboard::new() {
-                                if let Ok(text) = cb.get_text() {
-                                    for c in text.chars() {
-                                        app.insert_char(c);
+                        KeyCode::Char('v') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            if !app.loading {
+                                if let Ok(mut cb) = arboard::Clipboard::new() {
+                                    if let Ok(text) = cb.get_text() {
+                                        for c in text.chars() {
+                                            app.insert_char(c);
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    KeyCode::F(1) => {
-                        app.show_help = true;
-                    }
-                    KeyCode::Enter => {
-                        if app.loading {
-                            continue;
+                        KeyCode::Tab => {
+                            app.manager.next();
+                            app.scroll_offset = 0;
+                            app.error = None;
                         }
-                        let trimmed = app.input.trim();
-                        // Commands
-                        if trimmed == "/exit" || trimmed == "/quit" {
-                            break;
+                        KeyCode::BackTab => {
+                            app.manager.prev();
+                            app.scroll_offset = 0;
+                            app.error = None;
                         }
-                        if trimmed.is_empty() {
-                            continue;
+                        KeyCode::F(1) => {
+                            app.show_help = true;
                         }
-                        app.send_message();
-
-                        let system_prompt = app.system_prompt.clone();
-                        let llm_config = cfg.llm.clone();
-                        let history: Vec<_> = app.messages.iter()
-                            .filter(|m| m.role != "system")
-                            .map(|m| llm::ChatMessage {
-                                role: m.role.clone(),
-                                content: m.content.clone(),
-                            })
-                            .collect();
-
-                        let all_messages = {
-                            let mut msgs = vec![
-                                llm::ChatMessage {
-                                    role: "system".into(),
-                                    content: system_prompt,
-                                },
-                            ];
-                            let recent = history.iter().rev().take(20).rev();
-                            msgs.extend(recent.cloned());
-                            msgs
-                        };
-
-                        if use_stream {
-                            let cancel_rx = app.cancel_tx.take().map(|tx| tx.subscribe());
-                            let mut stream_rx = llm::chat_stream(llm_config, all_messages, cancel_rx);
-                            let tx = tx.clone();
-                            tokio::spawn(async move {
-                                while let Some(event) = stream_rx.recv().await {
-                                    let _ = tx.send(AppEvent::Stream(event));
-                                }
-                            });
-                        } else {
-                            let tx = tx.clone();
-                            tokio::spawn(async move {
-                                let result = llm::chat_with_messages(&llm_config, &all_messages).await;
-                                let _ = tx.send(AppEvent::NonStream(result));
-                            });
-                        }
-                    }
-                    KeyCode::Char(c) => {
-                        app.insert_char(c);
-                    }
-                    KeyCode::Backspace => {
-                        app.remove_char_before();
-                    }
-                    KeyCode::Delete => {
-                        app.remove_char_at();
-                    }
-                    KeyCode::Left => {
-                        if app.cursor_pos > 0 {
-                            app.cursor_pos -= 1;
-                        }
-                    }
-                    KeyCode::Right => {
-                        if app.cursor_pos < app.char_count() {
-                            app.cursor_pos += 1;
-                        }
-                    }
-                    KeyCode::Home => {
-                        app.cursor_pos = 0;
-                    }
-                    KeyCode::End => {
-                        app.cursor_pos = app.char_count();
-                    }
-                    KeyCode::Up => {
-                        app.scroll_up(1);
-                    }
-                    KeyCode::Down => {
-                        app.scroll_down(1);
-                    }
-                    KeyCode::PageUp => {
-                        app.scroll_up(5);
-                    }
-                    KeyCode::PageDown => {
-                        app.scroll_down(5);
-                    }
-                    KeyCode::Esc => {
-                        if app.loading {
-                            // Cancel current LLM request
-                            if let Some(tx) = app.cancel_tx.take() {
-                                let _ = tx.send(true);
+                        KeyCode::Enter => {
+                            if app.loading {
+                                continue;
                             }
-                        } else {
-                            app.scroll_to_bottom();
+                            let trimmed = app.input.trim();
+                            // Legacy /exit /quit (also handled by command parser)
+                            if trimmed == "/exit" || trimmed == "/quit" {
+                                break;
+                            }
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            app.send_message();
+
+                            let system_prompt = app.manager.active().system_prompt.clone();
+                            let llm_config = cfg.llm.clone();
+                            let history: Vec<_> = app.manager.active().messages.iter()
+                                .filter(|m| m.role != "system")
+                                .map(|m| llm::ChatMessage {
+                                    role: m.role.clone(),
+                                    content: m.content.clone(),
+                                })
+                                .collect();
+
+                            let all_messages = {
+                                let mut msgs = vec![
+                                    llm::ChatMessage {
+                                        role: "system".into(),
+                                        content: system_prompt,
+                                    },
+                                ];
+                                let recent = history.iter().rev().take(20).rev();
+                                msgs.extend(recent.cloned());
+                                msgs
+                            };
+
+                            if use_stream {
+                                let cancel_rx = app.cancel_tx.take().map(|tx| tx.subscribe());
+                                let mut stream_rx = llm::chat_stream(llm_config, all_messages, cancel_rx);
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    while let Some(event) = stream_rx.recv().await {
+                                        let _ = tx.send(AppEvent::Stream(event));
+                                    }
+                                });
+                            } else {
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    let result = llm::chat_with_messages(&llm_config, &all_messages).await;
+                                    let _ = tx.send(AppEvent::NonStream(result));
+                                });
+                            }
                         }
+                        KeyCode::Char(c) => {
+                            app.insert_char(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.remove_char_before();
+                        }
+                        KeyCode::Delete => {
+                            app.remove_char_at();
+                        }
+                        KeyCode::Left => {
+                            if app.cursor_pos > 0 {
+                                app.cursor_pos -= 1;
+                            }
+                        }
+                        KeyCode::Right => {
+                            if app.cursor_pos < app.char_count() {
+                                app.cursor_pos += 1;
+                            }
+                        }
+                        KeyCode::Home => {
+                            app.cursor_pos = 0;
+                        }
+                        KeyCode::End => {
+                            app.cursor_pos = app.char_count();
+                        }
+                        KeyCode::Up => {
+                            app.scroll_up(1);
+                        }
+                        KeyCode::Down => {
+                            app.scroll_down(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.scroll_up(5);
+                        }
+                        KeyCode::PageDown => {
+                            app.scroll_down(5);
+                        }
+                        KeyCode::Esc => {
+                            if app.loading {
+                                if let Some(tx) = app.cancel_tx.take() {
+                                    let _ = tx.send(true);
+                                }
+                            } else {
+                                app.scroll_to_bottom();
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
-                } // Event::Key
-                _ => {} // Ignore other events
-            } // match event::read()
+                _ => {}
+            }
         }
 
         // Process LLM events
@@ -335,7 +402,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                 }
                 AppEvent::Stream(StreamEvent::Cancelled(partial)) => {
                     if !partial.is_empty() {
-                        app.messages.push(Message {
+                        app.manager.active_mut().messages.push(Message {
                             role: "assistant".into(),
                             content: format!("{} [已打断]", partial),
                         });
@@ -346,7 +413,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                     app.cancel_tx = None;
                 }
                 AppEvent::Stream(StreamEvent::Done(full)) => {
-                    app.messages.push(Message {
+                    app.manager.active_mut().messages.push(Message {
                         role: "assistant".into(),
                         content: full,
                     });
@@ -363,7 +430,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                     app.cancel_tx = None;
                 }
                 AppEvent::NonStream(Ok(content)) => {
-                    app.messages.push(Message {
+                    app.manager.active_mut().messages.push(Message {
                         role: "assistant".into(),
                         content,
                     });

@@ -1,3 +1,5 @@
+pub mod manager;
+
 use anyhow::Context;
 use serde::Deserialize;
 

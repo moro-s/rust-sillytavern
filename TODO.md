@@ -23,16 +23,16 @@
 
 ## Phase 3：多角色支持
 
-- [ ] 角色管理模块（`character/manager.rs`）
-- [ ] 侧边栏角色列表（TUI 左侧面板）
-- [ ] 角色切换（Tab 键 / 点击切换）
-- [ ] 多角色对话历史隔离
-- [ ] `@角色名` 语法在消息中引用其他角色
-- [ ] 命令系统（`command/parser.rs`）
-  - `/` 前缀：系统命令（`/help`, `/clear`, `/save`, `/load`, `/quit`）
-  - `?` 前缀：查询命令（`?角色名` 查看角色信息, `?list` 列出所有角色, `?help`）
+- [x] 角色管理模块（`character/manager.rs`）
+- [x] 侧边栏角色列表（TUI 左侧面板）
+- [x] 角色切换（Tab 键 / Shift+Tab）
+- [x] 多角色对话历史隔离
+- [x] `@角色名` 语法在消息中引用其他角色
+- [x] 命令系统（`command/parser.rs`）
+  - `/` 前缀：`/exit`, `/help`, `/clear`, `/switch <name>`
+  - `?` 前缀：`?角色名` 查看角色信息, `?list` 列出所有角色
   - 命令解析器：前缀识别 → 参数提取 → 路由分发
-- [ ] 多角色批量导入（扫描 `characters/` 目录）
+- [x] 多角色批量导入（扫描 `characters/` 目录）
 
 ## Phase 4：Lorebook / 世界信息
 
