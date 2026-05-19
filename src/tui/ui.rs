@@ -212,8 +212,15 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     } else if app.loading {
         Span::styled(" 等待回复... ", Style::default().fg(Color::Yellow))
     } else {
+        let active_info = if app.lore_manager.active_keys.is_empty() {
+            String::new()
+        } else {
+            format!(" [世界: {}] ", app.lore_manager.active_keys.join(", "))
+        };
         Span::styled(
-            format!(" {} 条消息 | ↑↓滚动 | Esc回到底部 | Tab切换角色 ", app.manager.active().messages.len()),
+            format!("{} 条消息 | ↑↓滚动 | Tab切换角色{}",
+                app.manager.active().messages.len(),
+                active_info),
             Style::default().fg(Color::DarkGray),
         )
     };

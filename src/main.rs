@@ -1,7 +1,9 @@
 mod character;
 mod command;
 mod config;
+mod conversation;
 mod llm;
+mod lorebook;
 mod tui;
 
 use clap::Parser;

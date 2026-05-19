@@ -36,16 +36,16 @@
 
 ## Phase 4：Lorebook / 世界信息
 
-- [ ] Lorebook 数据模型（`lorebook/entry.rs`）
+- [x] Lorebook 数据模型（`lorebook/entry.rs`）
   - key, triggers[], content, priority, position
-- [ ] 触发匹配引擎（`lorebook/matcher.rs`）
+- [x] 触发匹配引擎（`lorebook/matcher.rs`）
   - 用户输入 + AI 回复中的关键词扫描
   - 按 priority 排序 + 去重
-- [ ] Lorebook 词条配置（`lorebooks/*.toml`）
-- [ ] 上下文窗口构建（`conversation/context.rs`）
+- [x] Lorebook 词条配置（`lorebooks/*.toml`）
+- [x] 上下文窗口构建（`conversation/context.rs`）
   - system prompt + 激活的 lorebook 词条 + 对话历史
-- [ ] 触发词高亮提示（TUI 中显示"已激活词条：魔龙传说、帝国..."
-- [ ] Lorebook 热加载（运行时修改词条文件自动生效）
+- [x] 触发词高亮提示（TUI 状态栏显示"已激活词条：魔龙传说、帝国骑士团"）
+- [x] Lorebook 热加载（运行时修改词条文件自动生效）
 
 ## Phase 5：持久化（SQLite）
 

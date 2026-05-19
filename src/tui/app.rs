@@ -1,8 +1,10 @@
 use crate::character::manager::CharacterManager;
 use crate::command;
 use crate::config;
+use crate::conversation;
 use crate::llm;
 use crate::llm::StreamEvent;
+use crate::lorebook;
 use crate::tui::selector;
 use crate::tui::ui;
 
@@ -19,6 +21,7 @@ pub struct Message {
 
 pub struct App {
     pub manager: CharacterManager,
+    pub lore_manager: lorebook::entry::LoreManager,
     pub input: String,
     pub cursor_pos: usize,
     pub loading: bool,
@@ -31,10 +34,18 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(character_name: &str) -> anyhow::Result<Self> {
+    pub fn new(character_name: &str, _world: Option<&str>) -> anyhow::Result<Self> {
         let manager = CharacterManager::load_all(character_name)?;
+        let mut lore_manager = lorebook::entry::LoreManager::new();
+        // Load from lorebooks/ first
+        lore_manager.load("lorebooks");
+        // Then try worlds/
+        if std::path::Path::new("worlds").exists() {
+            lore_manager.load("worlds");
+        }
         Ok(Self {
             manager,
+            lore_manager,
             input: String::new(),
             cursor_pos: 0,
             loading: false,
@@ -203,22 +214,23 @@ impl App {
     }
 }
 
-pub async fn run(character: Option<String>, _world: Option<String>) -> anyhow::Result<()> {
+pub async fn run(character: Option<String>, world: Option<String>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
 
-    let char_name = if let Some(name) = character {
-        name
+    let (char_name, world_name) = if let Some(name) = character {
+        (name, world.clone())
     } else {
-        let (name, world_selected) = selector::run(&mut terminal)?;
-        if let Some(ref wname) = world_selected {
-            if !wname.is_empty() {
-                println!("[世界: {}] (功能预留)", wname);
-            }
-        }
-        name
+        let (name, w) = selector::run(&mut terminal)?;
+        (name, w)
     };
 
-    let result = run_app(&mut terminal, &char_name).await;
+    if let Some(ref wname) = world_name {
+        if !wname.is_empty() {
+            println!("[世界: {}] (已激活)", wname);
+        }
+    }
+
+    let result = run_app(&mut terminal, &char_name, world_name.as_deref()).await;
     ratatui::restore();
     result
 }
@@ -228,14 +240,20 @@ enum AppEvent {
     NonStream(anyhow::Result<String>),
 }
 
-async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow::Result<()> {
-    let mut app = App::new(character_name)?;
+async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Option<&str>) -> anyhow::Result<()> {
+    let mut app = App::new(character_name, world)?;
     let cfg = config::load()?;
     let use_stream = cfg.llm.stream;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
+
+        // Check for lorebook hot-reload
+        app.lore_manager.check_hot_reload("lorebooks");
+        if std::path::Path::new("worlds").exists() {
+            app.lore_manager.check_hot_reload("worlds");
+        }
 
         if event::poll(Duration::from_millis(16))? {
             match event::read()? {
@@ -302,27 +320,39 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                             }
                             app.send_message();
 
-                            let system_prompt = app.manager.active().system_prompt.clone();
-                            let llm_config = cfg.llm.clone();
-                            let history: Vec<_> = app.manager.active().messages.iter()
-                                .filter(|m| m.role != "system")
-                                .map(|m| llm::ChatMessage {
-                                    role: m.role.clone(),
-                                    content: m.content.clone(),
-                                })
-                                .collect();
+                        let system_prompt = app.manager.active().system_prompt.clone();
+                        let llm_config = cfg.llm.clone();
 
-                            let all_messages = {
-                                let mut msgs = vec![
-                                    llm::ChatMessage {
-                                        role: "system".into(),
-                                        content: system_prompt,
-                                    },
-                                ];
-                                let recent = history.iter().rev().take(20).rev();
-                                msgs.extend(recent.cloned());
-                                msgs
-                            };
+                        // Scan for lorebook triggers
+                        let recent_text: String = app.manager.active().messages
+                            .iter()
+                            .rev()
+                            .take(5)
+                            .map(|m| m.content.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let activated = lorebook::matcher::match_entries(
+                            &app.lore_manager.entries,
+                            &recent_text,
+                        );
+                        app.lore_manager.active_keys = activated.iter()
+                            .map(|e| e.key.clone())
+                            .collect();
+
+                        let history: Vec<_> = app.manager.active().messages.iter()
+                            .filter(|m| m.role != "system")
+                            .map(|m| llm::ChatMessage {
+                                role: m.role.clone(),
+                                content: m.content.clone(),
+                            })
+                            .collect();
+
+                        let all_messages = conversation::context::build(
+                            &system_prompt,
+                            &history,
+                            &activated,
+                            20,
+                        );
 
                             if use_stream {
                                 let cancel_rx = app.cancel_tx.take().map(|tx| tx.subscribe());

@@ -8,10 +8,13 @@ AI 角色扮演酒馆 —— 终端里的沉浸式角色扮演体验。受 [Sill
 - **终端 UI（TUI）**：ratatui 驱动的全屏交互界面，聊天面板 + 输入栏 + 着色
 - **CLI 模式**：命令行快速对话，适合脚本和测试
 - **流式输出**：SSE 逐 token 接收，TUI 打字机效果，CLI 即时打印
+- **多角色支持**：侧边栏角色列表，Tab 切换，独立历史隔离
+- **命令系统**：`/` 系统命令、`?` 查询命令、`@` 角色引用
+- **Lorebook 世界信息**：关键词触发式记忆注入，热加载支持
 - **多后端**：支持任何 OpenAI 兼容 API（DeepSeek、OpenAI、Ollama 等）
 - **多轮对话**：TUI 模式保留完整对话历史
 
-> 📋 计划中：多角色切换 / `@角色名` 引用、`/` `?` 命令系统、Lorebook 世界信息、SQLite 持久化。详见 [TODO.md](TODO.md)。
+> 📋 计划中：SQLite 持久化。详见 [TODO.md](TODO.md)。
 
 ## 快速开始
 
@@ -111,6 +114,7 @@ first_message: "(推门进来，盔甲上还有未干的血迹) 嘿！老规矩�
 rust-SillyTavern/
 ├── Cargo.toml
 ├── config.toml           # LLM 配置
+├── lorebooks/            # Lorebook 词条配置 (.toml)
 ├── characters/           # 角色卡 (.md)
 └── src/
     ├── main.rs           # 入口（CLI + TUI 模式）
