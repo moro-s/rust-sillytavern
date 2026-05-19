@@ -59,6 +59,50 @@ impl App {
         })
     }
 
+    /// Convert char index to byte index
+    fn byte_pos(&self) -> usize {
+        self.input
+            .char_indices()
+            .nth(self.cursor_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len())
+    }
+
+    fn char_count(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    fn insert_char(&mut self, c: char) {
+        let pos = self.byte_pos();
+        self.input.insert(pos, c);
+        self.cursor_pos += 1;
+    }
+
+    fn remove_char_before(&mut self) {
+        if self.cursor_pos > 0 {
+            self.cursor_pos -= 1;
+            let start = self.byte_pos();
+            let end = self.input[start..]
+                .chars()
+                .next()
+                .map(|ch| start + ch.len_utf8())
+                .unwrap_or(start);
+            self.input.drain(start..end);
+        }
+    }
+
+    fn remove_char_at(&mut self) {
+        if self.cursor_pos < self.char_count() {
+            let pos = self.byte_pos();
+            let end = self.input[pos..]
+                .chars()
+                .next()
+                .map(|ch| pos + ch.len_utf8())
+                .unwrap_or(pos);
+            self.input.drain(pos..end);
+        }
+    }
+
     fn send_message(&mut self) {
         let input = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
@@ -113,7 +157,15 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
 
         // Poll for keyboard events
         if event::poll(Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
+            match event::read()? {
+                Event::Paste(text) => {
+                    if !app.loading {
+                        for c in text.chars() {
+                            app.insert_char(c);
+                        }
+                    }
+                }
+                Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
                     continue;
                 }
@@ -174,19 +226,13 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                         }
                     }
                     KeyCode::Char(c) => {
-                        app.input.insert(app.cursor_pos, c);
-                        app.cursor_pos += 1;
+                        app.insert_char(c);
                     }
                     KeyCode::Backspace => {
-                        if app.cursor_pos > 0 {
-                            app.cursor_pos -= 1;
-                            app.input.remove(app.cursor_pos);
-                        }
+                        app.remove_char_before();
                     }
                     KeyCode::Delete => {
-                        if app.cursor_pos < app.input.len() {
-                            app.input.remove(app.cursor_pos);
-                        }
+                        app.remove_char_at();
                     }
                     KeyCode::Left => {
                         if app.cursor_pos > 0 {
@@ -194,7 +240,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                         }
                     }
                     KeyCode::Right => {
-                        if app.cursor_pos < app.input.len() {
+                        if app.cursor_pos < app.char_count() {
                             app.cursor_pos += 1;
                         }
                     }
@@ -202,7 +248,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                         app.cursor_pos = 0;
                     }
                     KeyCode::End => {
-                        app.cursor_pos = app.input.len();
+                        app.cursor_pos = app.char_count();
                     }
                     KeyCode::Up => {
                         app.scroll_up(1);
@@ -221,7 +267,9 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str) -> anyhow
                     }
                     _ => {}
                 }
-            }
+                } // Event::Key
+                _ => {} // Ignore other events
+            } // match event::read()
         }
 
         // Process LLM events

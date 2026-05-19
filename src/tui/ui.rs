@@ -151,7 +151,14 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 
     // Show cursor
     if !app.loading {
-        let cursor_x = (area.x + 2 + app.cursor_pos as u16).min(area.right().saturating_sub(1));
+        // Calculate visual cursor position (CJK chars = 2 cells)
+        let prefix_width = 2u16; // "> "
+        let visual_pos: u16 = app.input
+            .chars()
+            .take(app.cursor_pos)
+            .map(|c| if is_wide(c) { 2u16 } else { 1u16 })
+            .sum();
+        let cursor_x = (area.x + prefix_width + visual_pos).min(area.right().saturating_sub(1));
         f.set_cursor_position((cursor_x, area.y + 1));
     }
 }
@@ -214,4 +221,24 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let y = r.y + (r.height.saturating_sub(popup_height)) / 2;
 
     Rect::new(x, y, popup_width.min(r.width), popup_height.min(r.height))
+}
+
+/// Check if a character occupies 2 terminal cells (CJK, fullwidth, etc.)
+fn is_wide(c: char) -> bool {
+    matches!(
+        c,
+        '\u{1100}'..='\u{115F}' |   // Hangul Jamo
+        '\u{2329}'..='\u{232A}' |   // Misc Technical
+        '\u{2E80}'..='\u{A4CF}' |   // CJK Radicals Supplement .. Yi
+        '\u{AC00}'..='\u{D7A3}' |   // Hangul Syllables
+        '\u{F900}'..='\u{FAFF}' |   // CJK Compatibility Ideographs
+        '\u{FE10}'..='\u{FE19}' |   // Vertical forms
+        '\u{FE30}'..='\u{FE6F}' |   // CJK Compatibility Forms
+        '\u{FF01}'..='\u{FF60}' |   // Fullwidth Forms
+        '\u{FFE0}'..='\u{FFE6}' |   // Fullwidth Signs
+        '\u{1F300}'..='\u{1F64F}' | // Misc Symbols, Emoticons
+        '\u{1F900}'..='\u{1F9FF}' | // Supplemental Symbols
+        '\u{20000}'..='\u{2FFFD}' | // CJK Unified Ideographs Extension B+
+        '\u{30000}'..='\u{3FFFD}'    // CJK Extension G+
+    )
 }
