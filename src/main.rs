@@ -5,7 +5,6 @@ mod conversation;
 mod db;
 mod llm;
 mod lorebook;
-mod state;
 mod tui;
 
 use clap::Parser;

@@ -183,6 +183,7 @@ impl App {
             command::parser::Command::CreateWorld(name) => { self.handle_create_world(&name); return; }
             command::parser::Command::SetSelf(text) => { self.handle_set_self(&text); return; }
             command::parser::Command::ManageState(args) => { self.handle_manage_state(&args); return; }
+            command::parser::Command::Export => { self.handle_export(); return; }
             command::parser::Command::Info(name) => {
                 if let Some(c) = db::store::get_character(&self.db, name.trim()).ok().flatten() {
                     self.manager.active_mut().messages.push(Message {
@@ -305,12 +306,55 @@ impl App {
         let category = parts.get(1).map(|s| *s).unwrap_or("item");
         let key = parts.get(2).map(|s| *s).unwrap_or("");
         let data_str = parts.get(3).map(|s| *s).unwrap_or("");
-
         let char_id = self.manager.active().id;
         match db::store::manage_state(&self.db, "character_states", char_id, action, category, key, data_str) {
             Ok(result) => self.error = Some(result),
             Err(e) => self.error = Some(format!("状态操作失败: {}", e)),
         }
+    }
+
+    /// Export all characters and worlds to .md files
+    pub fn handle_export(&mut self) {
+        let mut count = 0;
+        // Export characters
+        if let Ok(chars) = db::store::list_characters(&self.db) {
+            let _ = std::fs::create_dir_all("characters");
+            for c in &chars {
+                let md = format!(
+                    "---\nname: {name}\npersonality: {pers}\nspeech_style: {style}\nfirst_message: {first}\n---\n\n{body}\n",
+                    name=c.name, pers=c.personality, style=c.speech_style, first=c.first_message, body=c.background
+                );
+                let _ = std::fs::write(format!("characters/{}.md", c.slug), &md);
+                count += 1;
+            }
+        }
+        // Export worlds
+        if let Ok(worlds) = db::store::list_worlds(&self.db) {
+            for w in &worlds {
+                let dir = format!("worlds/{}", w.slug);
+                let _ = std::fs::create_dir_all(&dir);
+                let md = format!(
+                    "---\nname: {name}\ndescription: {desc}\n---\n\n{overview}\n",
+                    name=w.name, desc=w.description, overview=w.overview
+                );
+                let _ = std::fs::write(format!("{}/world.md", dir), &md);
+                count += 1;
+            }
+        }
+        // Export lore
+        if let Ok(lores) = db::store::list_lore(&self.db) {
+            let _ = std::fs::create_dir_all("lorebooks");
+            for l in &lores {
+                let triggers = l.triggers.join(", ");
+                let md = format!(
+                    "# {key}\n\n| 属性 | 值 |\n|------|----|\n| triggers | {triggers} |\n| priority | {priority} |\n\n{content}\n",
+                    key=l.key, triggers=triggers, priority=l.priority, content=l.content
+                );
+                let _ = std::fs::write(format!("lorebooks/{}.md", l.key), &md);
+                count += 1;
+            }
+        }
+        self.error = Some(format!("已导出 {} 个文件", count));
     }
 
     pub fn character_name(&self) -> &str { self.manager.active_name() }

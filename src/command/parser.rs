@@ -25,6 +25,8 @@ pub enum Command {
     SetSelf(String),
     /// `/state <query>` — manage character state
     ManageState(String),
+    /// `/export` — export to .md files
+    Export,
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -54,6 +56,7 @@ pub fn parse(input: &str) -> (Command, String) {
             "cw" => (Command::CreateWorld(_args.trim().to_string()), String::new()),
             "self" => (Command::SetSelf(_args.trim().to_string()), String::new()),
             "state" => (Command::ManageState(_args.trim().to_string()), String::new()),
+            "export" | "exp" => (Command::Export, String::new()),
             _ => (Command::None, input.to_string()),
         };
     }
