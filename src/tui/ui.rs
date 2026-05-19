@@ -212,10 +212,10 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     } else if app.loading {
         Span::styled(" 等待回复... ", Style::default().fg(Color::Yellow))
     } else {
-        let active_info = if app.lore_manager.active_keys.is_empty() {
+        let active_info = if app.active_lore_keys.is_empty() {
             String::new()
         } else {
-            format!(" [世界: {}] ", app.lore_manager.active_keys.join(", "))
+            format!(" [世界: {}] ", app.active_lore_keys.join(", "))
         };
         Span::styled(
             format!("{} 条消息 | ↑↓滚动 | Tab切换角色{}",

@@ -58,7 +58,21 @@
   - `--new-session` 开始新对话
   - `--ls` 查看历史会话
   - `--resume <id>` 恢复历史会话
-- [ ] 自动保存（每 N 轮触发）
+- [x] 自动保存（每 N 轮触发）
+
+## Phase 5.5：全部迁移 SQLite（主数据源）
+
+- [x] 12 表完整 schema（worlds, characters, locations, lore_entries, 3 中间表, sessions, messages, 3 状态表, user_persona）
+- [x] full CRUD（`db/store.rs`）
+- [x] character/manager.rs 改走 SQLite
+- [x] lorebook 词条扫描改走 SQLite（LoreRow）
+- [x] state 管理改走 SQLite（manage_state → character_states 表）
+- [x] selector 选角界面改走 SQLite
+- [x] CLI `--cl` `--wl` 改走 SQLite
+- [x] 用户设定 `self_persona` 入 SQLite
+- [ ] 清理废弃文件（.state.md, lorebooks/*.toml .md, state.rs 旧代码）
+- [ ] `/export` 命令（SQLite → .md 导出）
+- [ ] 热加载迁移（SQLite 为主后简化）
 
 ## Phase 6：角色间互动
 

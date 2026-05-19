@@ -47,71 +47,28 @@ struct Args {
     resume_id: Option<i64>,
 }
 
-fn scan_characters() -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir("characters") {
-        names = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
-            .filter_map(|e| {
-                e.path()
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(String::from)
-            })
-            .collect();
-        names.sort();
-    }
-    names
-}
-
-fn scan_worlds() -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    let dirs = ["lorebooks", "worlds"];
-    for dir in &dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            names.extend(
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "toml"))
-                    .filter_map(|e| {
-                        e.path()
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .map(String::from)
-                    }),
-            );
-        }
-    }
-    names.sort();
-    names.dedup();
-    names
-}
-
 fn list_available_characters() {
-    let names = scan_characters();
-    println!("\n可用角色:\n");
-    if names.is_empty() {
-        println!("  (无角色文件)");
-    } else {
-        for name in &names {
-            println!("  - {}", name);
+    if let Ok(db) = db::schema::open() {
+        if let Ok(chars) = db::store::list_characters(&db) {
+            println!("\n可用角色:\n");
+            for c in &chars { println!("  - {} ({})", c.slug, c.name); }
+            println!("\n共 {} 个角色\n", chars.len());
+            return;
         }
     }
-    println!("\n共 {} 个角色\n", names.len());
+    println!("\n无法读取角色列表\n");
 }
 
 fn list_available_worlds() {
-    println!("\n可用世界（Lorebook）:\n");
-    let names = scan_worlds();
-    if names.is_empty() {
-        println!("  lorebooks/ 或 worlds/ 目录不存在，请先创建\n");
-    } else {
-        for name in &names {
-            println!("  - {}", name);
+    if let Ok(db) = db::schema::open() {
+        if let Ok(worlds) = db::store::list_worlds(&db) {
+            println!("\n可用世界:\n");
+            for w in &worlds { println!("  - {}", w.slug); }
+            println!("\n共 {} 个世界\n", worlds.len());
+            return;
         }
-        println!("\n共 {} 个世界\n", names.len());
     }
+    println!("\n无法读取世界列表\n");
 }
 
 #[tokio::main]
@@ -139,9 +96,6 @@ async fn main() -> anyhow::Result<()> {
         let card = character::load(char_name)?;
         let system_prompt = character::build_system_prompt(&card);
 
-        if let Some(ref world) = args.world {
-            println!("[世界: {}]", world);
-        }
         println!("\n[{}]", card.meta.name);
 
         if cfg.llm.stream {
