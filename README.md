@@ -5,47 +5,64 @@ AI 角色扮演酒馆 —— 终端里的沉浸式角色扮演体验。受 [Sill
 ## 特性
 
 - **角色卡系统**：Markdown + YAML 头信息定义角色（名字、性格、说话风格、背景知识）
-- **多角色支持**：在多个角色间切换对话，剧情中角色可互相交流
-- **Lorebook（世界信息）**：关键词触发式记忆注入，类似 SillyTavern World Info
-- **终端 UI**：ratatui 驱动的全屏交互界面
-- **持久化**：SQLite 存储对话历史和角色状态
-- **多后端**：支持任何 OpenAI 兼容 API（OpenAI、Ollama、Moonshot 等）
+- **终端 UI（TUI）**：ratatui 驱动的全屏交互界面，聊天面板 + 输入栏 + 着色
+- **CLI 模式**：命令行快速对话，适合脚本和测试
+- **多后端**：支持任何 OpenAI 兼容 API（DeepSeek、OpenAI、Ollama 等）
+- **多轮对话**：TUI 模式保留完整对话历史
+
+> 📋 计划中：多角色切换、Lorebook 世界信息、SQLite 持久化、流式输出。详见 [TODO.md](TODO.md)。
 
 ## 快速开始
 
 ### 前置条件
 
 - Rust 1.85+
-- OpenAI 兼容的 API（或本地 Ollama）
 
 ### 配置
 
-1. 复制 `config.toml` 并填入 API Key：
+编辑 `config.toml`：
 
 ```toml
 [llm]
-base_url = "https://api.openai.com/v1"
+# DeepSeek（推荐，中文效果好）
+base_url = "https://api.deepseek.com/v1"
 api_key = "sk-your-key-here"
-model = "gpt-4o-mini"
-```
+model = "deepseek-chat"
 
-使用 Ollama 本地模型：
-```toml
-[llm]
-base_url = "http://localhost:11434/v1"
-api_key = "ollama"
-model = "qwen2.5:7b"
+# 或 Ollama 本地模型
+# base_url = "http://localhost:11434/v1"
+# api_key = "ollama"
+# model = "qwen2.5:7b"
 ```
 
 ### 运行
 
 ```bash
-# 与默认角色（老酒保）对话
+# TUI 交互模式（默认）
+cargo run
+
+# 指定角色进入 TUI
+cargo run -- -c mage
+
+# CLI 单次对话模式
 cargo run -- -m "来杯麦酒"
 
-# 指定角色
+# CLI 指定角色
 cargo run -- -c mage -m "教我火球术"
 ```
+
+### TUI 快捷键
+
+| 键 | 功能 |
+|----|------|
+| `Enter` | 发送消息 |
+| `Ctrl+C` | 退出程序 |
+| `F1` | 显示/隐藏帮助 |
+| `↑` / `↓` | 滚动聊天记录 |
+| `PgUp` / `PgDn` | 快速滚动 |
+| `Esc` | 跳转到最新消息 |
+| `←` / `→` | 移动输入光标 |
+| `Home` / `End` | 光标跳到行首/行尾 |
 
 ## 角色卡格式
 
@@ -77,13 +94,15 @@ rust-SillyTavern/
 ├── Cargo.toml
 ├── config.toml           # LLM 配置
 ├── characters/           # 角色卡 (.md)
-├── lorebooks/            # Lorebook 词条 (.toml)
-├── data/                 # SQLite 数据库
 └── src/
-    ├── main.rs           # CLI 入口
+    ├── main.rs           # 入口（CLI + TUI 模式）
     ├── config.rs         # 配置读取
     ├── character.rs      # 角色卡解析 + system prompt 构建
-    └── llm.rs            # LLM API 客户端
+    ├── llm.rs            # LLM API 客户端
+    └── tui/
+        ├── mod.rs
+        ├── app.rs        # TUI 事件循环 & 状态管理
+        └── ui.rs         # 界面渲染
 ```
 
 ## 技术栈
@@ -95,7 +114,6 @@ rust-SillyTavern/
 | `serde` + `serde_json` + `serde_yaml` | 序列化 |
 | `toml` | 配置文件解析 |
 | `clap` | CLI 参数解析 |
-| `rusqlite` | SQLite 持久化 |
 
 ## 许可证
 
