@@ -985,7 +985,15 @@ fn now_str() -> String {
 pub async fn run(character: Option<String>, world: Option<String>, resume_id: Option<i64>, new_session: bool) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
     let (char_name, world_name) = if let Some(n) = character { (n, world) }
-    else { let (n,w) = selector::run(&mut terminal)?; (n,w) };
+    else {
+        loop {
+            match selector::run(&mut terminal)? {
+                selector::Action::Select { character, world } => break (character, world),
+                // 创建功能尚未实现，回到选择器重新选择
+                selector::Action::CreateCharacter | selector::Action::CreateWorld => continue,
+            }
+        }
+    };
     let result = run_app(&mut terminal, &char_name, world_name.as_deref(), resume_id, new_session).await;
     ratatui::restore();
     result
