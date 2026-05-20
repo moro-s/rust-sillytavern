@@ -1,4 +1,4 @@
-use crate::tui::app::{App, Message};
+use crate::tui::app::{App, Message, Wizard};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -170,10 +170,29 @@ fn render_message<'a>(msg: &'a Message, char_name: &'a str) -> Vec<Line<'a>> {
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    let title = if app.loading {
-        " 输入 (思考中...) "
+    let title = if let Some(ref wiz) = app.wizard {
+        match wiz {
+            Wizard::CreateWorld { name, step, .. } => {
+                match step {
+                    0 => format!(" 创建世界: 「{}」 - 输入一句话描述 ", name),
+                    1 => format!(" 创建世界: 「{}」 - 输入世界观概述 ", name),
+                    _ => " 输入 ".into(),
+                }
+            }
+            Wizard::CreateChar { name, step, .. } => {
+                match step {
+                    0 => format!(" 创建角色: 「{}」 - 输入显示名 ", name),
+                    1 => format!(" 创建角色: 「{}」 - 输入性格描述 ", name),
+                    2 => format!(" 创建角色: 「{}」 - 输入说话风格 ", name),
+                    3 => format!(" 创建角色: 「{}」 - 输入开场白 ", name),
+                    _ => " 输入 ".into(),
+                }
+            }
+        }
+    } else if app.loading {
+        " 输入 (思考中...) ".into()
     } else {
-        " 输入 (Enter/Tab, Esc打断, Ctrl+C/V, F1, ?list帮助) "
+        " 输入 (Enter/Tab, Esc打断, Ctrl+C/V, F1) ".into()
     };
 
     let block = Block::default()

@@ -38,6 +38,13 @@ pub struct App {
     pub self_persona: String,
     pub world_id: Option<i64>,
     pub active_lore_keys: Vec<String>,
+    pub wizard: Option<Wizard>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Wizard {
+    CreateWorld { slug: String, name: String, step: u8, description: String },
+    CreateChar  { slug: String, step: u8, name: String, personality: String, speech_style: String },
 }
 
 fn build_lore_text(entries: &[&db::store::LoreRow]) -> String {
@@ -124,6 +131,7 @@ impl App {
             self_persona,
             world_id: None,
             active_lore_keys: Vec::new(),
+            wizard: None,
         })
     }
 
@@ -158,6 +166,13 @@ impl App {
     fn send_message(&mut self) {
         let input_text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
+
+        // Handle wizard input first
+        if self.wizard.is_some() {
+            self.handle_wizard_input(&input_text);
+            return;
+        }
+
         let (cmd, content) = command::parser::parse(&input_text);
         match cmd {
             command::parser::Command::Quit => { self.save_current(); self.should_quit = true; return; }
@@ -256,33 +271,78 @@ impl App {
     pub fn handle_create_char(&mut self, name: &str) {
         let name = name.trim();
         if name.is_empty() { self.error = Some("用法: /cc <角色名>".into()); return; }
-        let slug = name;
-        if db::store::get_character(&self.db, slug).ok().flatten().is_some() {
+        let slug = name.to_string();
+        if db::store::get_character(&self.db, &slug).ok().flatten().is_some() {
             self.error = Some(format!("角色 '{}' 已存在", name)); return;
         }
-        let row = db::store::CharacterRow {
-            id: 0, slug: slug.to_string(), name: name.to_string(),
-            personality: String::new(), speech_style: String::new(),
-            first_message: String::new(), background: String::new(),
-        };
-        match db::store::create_character(&self.db, &row) {
-            Ok(_) => {
-                // Reload manager
-                let active = self.manager.active_name().to_string();
-                if let Ok(m) = CharacterManager::load_all(&self.db, &active) { self.manager = m; }
-                self.error = Some(format!("角色 '{}' 已创建，可用 /self 命令设定性格", name));
-            }
-            Err(e) => self.error = Some(format!("创建失败: {}", e)),
-        }
+        self.wizard = Some(Wizard::CreateChar { slug, step: 0, name: name.to_string(), personality: String::new(), speech_style: String::new() });
     }
 
     pub fn handle_create_world(&mut self, name: &str) {
         let name = name.trim();
         if name.is_empty() { self.error = Some("用法: /cw <世界名>".into()); return; }
-        let row = db::store::WorldRow { id: 0, slug: name.to_string(), name: name.to_string(), description: String::new(), overview: String::new() };
-        match db::store::create_world(&self.db, &row) {
-            Ok(_) => self.error = Some(format!("世界 '{}' 已创建", name)),
-            Err(e) => self.error = Some(format!("创建失败: {}", e)),
+        let slug = name.to_string();
+        if db::store::get_world(&self.db, &slug).ok().flatten().is_some() {
+            self.error = Some(format!("世界 '{}' 已存在", name)); return;
+        }
+        self.wizard = Some(Wizard::CreateWorld { slug, name: name.to_string(), step: 0, description: String::new() });
+    }
+
+    fn handle_wizard_input(&mut self, input: &str) {
+        let wizard = self.wizard.take();
+        match wizard {
+            Some(Wizard::CreateWorld { slug, name, step, description }) => {
+                let input = input.trim().to_string();
+                match step {
+                    0 => {
+                        self.error = Some(format!("世界名: {}\n\n请输入一句话描述（可选，回车跳过）:", name));
+                        self.wizard = Some(Wizard::CreateWorld { slug, name, step: 1, description: input });
+                    }
+                    1 => {
+                        let desc = if description.is_empty() { "未填写".into() } else { description };
+                        let row = db::store::WorldRow { id: 0, slug: slug.clone(), name: name.clone(), description: desc, overview: input };
+                        match db::store::create_world(&self.db, &row) {
+                            Ok(_) => self.error = Some(format!("世界 '{}' 已创建", name)),
+                            Err(e) => self.error = Some(format!("创建失败: {}", e)),
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Some(Wizard::CreateChar { slug, step, name, personality, speech_style }) => {
+                let input = input.trim().to_string();
+                match step {
+                    0 => {
+                        self.error = Some(format!("角色名: {}\n\n请输入性格描述:", name));
+                        self.wizard = Some(Wizard::CreateChar { slug, step: 1, name: input, personality: String::new(), speech_style: String::new() });
+                    }
+                    1 => {
+                        self.error = Some(format!("角色名: {}\n性格: {}\n\n请输入说话风格:", name, input));
+                        self.wizard = Some(Wizard::CreateChar { slug, step: 2, name, personality: input, speech_style: String::new() });
+                    }
+                    2 => {
+                        self.error = Some(format!("角色名: {}\n性格: {}\n说话风格: {}\n\n请输入开场白:", name, personality, input));
+                        self.wizard = Some(Wizard::CreateChar { slug, step: 3, name, personality, speech_style: input });
+                    }
+                    3 => {
+                        let row = db::store::CharacterRow {
+                            id: 0, slug: slug.clone(), name: name.clone(),
+                            personality, speech_style,
+                            first_message: input, background: String::new(),
+                        };
+                        match db::store::create_character(&self.db, &row) {
+                            Ok(_) => {
+                                let active = self.manager.active_name().to_string();
+                                if let Ok(m) = CharacterManager::load_all(&self.db, &active) { self.manager = m; }
+                                self.error = Some(format!("角色 '{}' 已创建，可用 /self 设定背景", name));
+                            }
+                            Err(e) => self.error = Some(format!("创建失败: {}", e)),
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None => {}
         }
     }
 
