@@ -76,16 +76,22 @@ pub fn run(terminal: &mut DefaultTerminal) -> anyhow::Result<Action> {
                 if key.kind == KeyEventKind::Release { continue; }
                 match key.code {
                     KeyCode::Enter => {
-                        let chosen_char = &sel.characters[sel.char_index];
-                        let chosen_world = &sel.worlds[sel.world_index];
-                        if chosen_char == LABEL_CREATE_CHAR {
-                            return Ok(Action::CreateCharacter);
+                        match sel.focus {
+                            Focus::Character => {
+                                if sel.characters[sel.char_index] == LABEL_CREATE_CHAR {
+                                    return Ok(Action::CreateCharacter);
+                                }
+                            }
+                            Focus::World => {
+                                if sel.worlds[sel.world_index] == LABEL_CREATE_WORLD {
+                                    return Ok(Action::CreateWorld);
+                                }
+                            }
                         }
-                        if chosen_world == LABEL_CREATE_WORLD {
-                            return Ok(Action::CreateWorld);
-                        }
-                        let world_name = if is_create_label(chosen_world) { None } else { Some(chosen_world.clone()) };
-                        return Ok(Action::Select { character: chosen_char.clone(), world: world_name });
+                        // 走到这里说明聚焦项不是创建标签 → 正常选择
+                        let char_name = sel.characters[sel.char_index].clone();
+                        let world_name = if is_create_label(&sel.worlds[sel.world_index]) { None } else { Some(sel.worlds[sel.world_index].clone()) };
+                        return Ok(Action::Select { character: char_name, world: world_name });
                     }
                     KeyCode::Char('q') | KeyCode::Esc => {
                         // 找到第一个真实角色（跳过创建标签）

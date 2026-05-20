@@ -3,7 +3,10 @@ use std::path::Path;
 
 /// 初始化日志系统
 ///
-/// 日志写入 `data/logs/` 目录，按天轮转，保留最近 7 天。
+/// 日志写入 `data/logs/` 目录：
+/// - 活跃日志固定为 `tavern.log`（每次启动追加写入）
+/// - 按天轮转或单文件超过 100MB 时自动归档为 `tavern_r<时间戳>.log`
+/// - 保留最近 7 个归档文件
 /// 默认级别可通过环境变量 `RUST_LOG` 控制，未设置则使用 `info,rust_sillytavern=debug`。
 pub fn init() -> anyhow::Result<()> {
     let log_dir = Path::new("data").join("logs");
@@ -15,10 +18,12 @@ pub fn init() -> anyhow::Result<()> {
         .log_to_file(
             flexi_logger::FileSpec::default()
                 .directory(&log_dir)
+                .suppress_timestamp()
                 .basename("tavern"),
         )
+        .append()
         .rotate(
-            flexi_logger::Criterion::Age(flexi_logger::Age::Day),
+            flexi_logger::Criterion::AgeOrSize(flexi_logger::Age::Day, 100 * 1024 * 1024),
             flexi_logger::Naming::Timestamps,
             flexi_logger::Cleanup::KeepLogFiles(7),
         )
