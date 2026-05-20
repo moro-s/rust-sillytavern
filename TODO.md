@@ -70,9 +70,21 @@
 - [x] selector 选角界面改走 SQLite
 - [x] CLI `--cl` `--wl` 改走 SQLite
 - [x] 用户设定 `self_persona` 入 SQLite
-- [ ] 清理废弃文件（.state.md, lorebooks/*.toml .md, state.rs 旧代码）
-- [ ] `/export` 命令（SQLite → .md 导出）
-- [ ] 热加载迁移（SQLite 为主后简化）
+- [x] 清理废弃文件（.state.md, lorebooks/*.toml .md, state.rs 旧代码）
+- [x] `/export` 命令（SQLite → .md 导出）
+- [x] 热加载迁移（SQLite 为主后简化）
+
+## Phase 5.6：世界/地点/引导式创建
+
+- [x] world support: 侧边栏世界列表, Ctrl+W 切换, 角色过滤
+- [x] `/world <name>` 切换世界, `/link <角色> <世界>` 关联
+- [x] `/location add <世界> <地点>` 创建地点
+- [x] `/location list [世界]` 列出地点
+- [x] `/cc` `/cw` 改为引导式多步创建
+- [x] `manage_state` 通用接口 (character/world/location 三表路由)
+- [x] `-w <world>` 启动参数生效
+- [ ] 世界卡细节完善（world.md 导出, 世界级事件/法则）
+- [ ] 地点状态交互式管理
 
 ## Phase 6：角色间互动
 

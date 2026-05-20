@@ -11,7 +11,9 @@ AI 角色扮演酒馆 —— 终端里的沉浸式角色扮演体验。受 [Sill
 - **多角色支持**：侧边栏角色列表，Tab 切换，独立历史隔离
 - **命令系统**：`/` 系统命令、`?` 查询命令、`@` 角色引用
 - **Lorebook 世界信息**：关键词触发式记忆注入，热加载支持
-- **SQLite 全数据源**：角色/世界/词条/状态/会话全部存入数据库，查询毫秒级
+- **世界系统**：世界管理、地点系统、角色-世界关联、世界状态
+- **SQLite 全数据源**：12 表完整 schema，角色/世界/词条/状态/会话全部存库
+- **引导式创建**：`/cc` `/cw` 多步提示，无需手动编辑文件
 - **多后端**：支持任何 OpenAI 兼容 API（DeepSeek、OpenAI、Ollama 等）
 - **多轮对话**：TUI 模式保留完整对话历史
 
@@ -68,15 +70,49 @@ cargo run -- --wl
 | 键 | 功能 |
 |----|------|
 | `Enter` | 发送消息 |
+| `Tab` / `Shift+Tab` | 切换角色 |
+| `Ctrl+W` | 循环切换世界 |
 | `Ctrl+C` | 复制输入框内容 |
 | `Ctrl+V` | 粘贴剪贴板内容 |
-| `/exit` `/quit` | 退出程序 |
 | `F1` | 显示/隐藏帮助 |
+| `Esc` | 打断回复 / 回到底部 |
 | `↑` / `↓` | 滚动聊天记录 |
 | `PgUp` / `PgDn` | 快速滚动 |
-| `Esc` | 打断回复 / 跳转到最新消息 |
-| `←` / `→` | 移动输入光标 |
-| `Home` / `End` | 光标跳到行首/行尾 |
+
+### TUI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `/exit` `/quit` | 保存并退出 |
+| `/help` | 显示帮助 |
+| `/clear` | 清除当前角色对话 |
+| `/save` `/load <id>` | 保存/加载会话 |
+| `/cc <slug>` | 引导式创建角色 |
+| `/cw <slug>` | 引导式创建世界 |
+| `/self <设定>` | 设置用户本人角色设定 |
+| `/state <action> <category> <key> [data]` | 管理角色状态 |
+| `/switch <slug>` | 切换到指定角色 |
+| `/world <slug>` | 切换到指定世界 |
+| `/link <角色> <世界>` | 关联角色到世界 |
+| `/location add <世界> <地点>` | 创建地点 |
+| `/location list [世界]` | 列出地点 |
+| `/export` | 导出全部到 .md 文件 |
+| `?<名字>` | 查看角色信息 |
+| `?list` | 列出所有角色 |
+| `@<名字>` | 在消息中引用其他角色 |
+
+### CLI 参数
+
+| 参数 | 说明 |
+|------|------|
+| `-c` `--char` | 选择角色 |
+| `-w` `--world` | 选择世界 |
+| `-m` `--message` | CLI 单次对话 |
+| `--cl` | 列出所有角色 |
+| `--wl` | 列出所有世界 |
+| `--ls` | 列出历史会话 |
+| `--resume <id>` | 恢复指定会话 |
+| `--new-session` | 开始全新会话 |
 
 ### 命令系统（计划）
 
@@ -114,18 +150,37 @@ first_message: "(推门进来，盔甲上还有未干的血迹) 嘿！老规矩�
 ```
 rust-SillyTavern/
 ├── Cargo.toml
-├── config.toml           # LLM 配置
-├── lorebooks/            # Lorebook 词条配置 (.toml)
-├── characters/           # 角色卡 (.md)
+├── config.toml              # LLM 配置
+├── data/                    # SQLite 数据库
+├── characters/              # 导出的角色卡 (.md)
+├── worlds/                  # 导出的世界卡 (.md)
+├── lorebooks/               # 导出的词条 (.md)
 └── src/
-    ├── main.rs           # 入口（CLI + TUI 模式）
-    ├── config.rs         # 配置读取
-    ├── character.rs      # 角色卡解析 + system prompt 构建
-    ├── llm.rs            # LLM API 客户端
+    ├── main.rs              # 入口（CLI + TUI）
+    ├── config.rs            # 配置读取
+    ├── character/
+    │   ├── mod.rs           # 角色卡数据结构
+    │   └── manager.rs       # 角色管理器（SQLite）
+    ├── command/
+    │   ├── mod.rs
+    │   └── parser.rs        # / ? @ 命令解析
+    ├── conversation/
+    │   ├── mod.rs
+    │   └── context.rs       # 上下文构建
+    ├── db/
+    │   ├── mod.rs
+    │   ├── schema.rs        # 12 表 schema + 初始化
+    │   └── store.rs         # CRUD 操作
+    ├── lorebook/
+    │   ├── mod.rs
+    │   ├── entry.rs         # 词条模型
+    │   └── matcher.rs       # 触发匹配
+    ├── llm.rs               # LLM API 客户端 + SSE 流式
     └── tui/
         ├── mod.rs
-        ├── app.rs        # TUI 事件循环 & 状态管理
-        └── ui.rs         # 界面渲染
+        ├── app.rs           # App 状态 + 事件循环
+        ├── selector.rs      # 启动选择器
+        └── ui.rs            # 界面渲染
 ```
 
 ## 技术栈
