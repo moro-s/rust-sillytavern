@@ -22,6 +22,15 @@ pub fn init() -> anyhow::Result<()> {
                 .basename("tavern"),
         )
         .append()
+        .format(|w, now, record| {
+            write!(
+                w,
+                "{} {} {}",
+                record.module_path().unwrap_or("?"),
+                now.format("%H:%M:%S"),
+                record.args()
+            )
+        })
         .rotate(
             flexi_logger::Criterion::AgeOrSize(flexi_logger::Age::Day, 100 * 1024 * 1024),
             flexi_logger::Naming::Timestamps,
