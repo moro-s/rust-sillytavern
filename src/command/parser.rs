@@ -31,6 +31,8 @@ pub enum Command {
     World(String),
     /// `/link <char> <world>` — link character to world
     Link(String, String),
+    /// `/location <action> <args>` — manage locations
+    Location(String),
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -66,6 +68,7 @@ pub fn parse(input: &str) -> (Command, String) {
                 let (char_name, world_name) = _args.split_once(' ').unwrap_or((_args, ""));
                 (Command::Link(char_name.trim().to_string(), world_name.trim().to_string()), String::new())
             },
+            "location" | "loc" => (Command::Location(_args.trim().to_string()), String::new()),
             _ => (Command::None, input.to_string()),
         };
     }

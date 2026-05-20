@@ -201,6 +201,7 @@ impl App {
             command::parser::Command::Export => { self.handle_export(); return; }
             command::parser::Command::World(name) => { self.handle_switch_world(&name); return; }
             command::parser::Command::Link(char_name, world_name) => { self.handle_link(&char_name, &world_name); return; }
+            command::parser::Command::Location(args) => { self.handle_location(&args); return; }
             command::parser::Command::Info(name) => {
                 if let Some(c) = db::store::get_character(&self.db, name.trim()).ok().flatten() {
                     self.manager.active_mut().messages.push(Message {
@@ -414,6 +415,62 @@ impl App {
                 self.error = Some(format!("已将 '{}' 关联到世界 '{}'", char_name, world_name));
             }
             Err(e) => self.error = Some(format!("关联失败: {}", e)),
+        }
+    }
+
+    /// Location management: /location add <world> <name> [desc]
+    pub fn handle_location(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(3, ' ').collect();
+        let action = parts.first().map(|s| *s).unwrap_or("list");
+        let world_slug = parts.get(1).map(|s| *s).unwrap_or("");
+        let rest = parts.get(2).map(|s| *s).unwrap_or("");
+
+        match action {
+            "add" | "create" => {
+                if world_slug.is_empty() || rest.is_empty() {
+                    self.error = Some("用法: /location add <世界slug> <地点名> [描述]".into());
+                    return;
+                }
+                let name = rest;
+                let slug = name;
+                // Find world_id
+                if let Ok(Some(world)) = db::store::get_world(&self.db, world_slug) {
+                    let row = db::store::LocationRow {
+                        id: 0, slug: slug.to_string(), name: name.to_string(),
+                        description: String::new(), connects_to: String::new(), world_id: world.id,
+                    };
+                    match db::store::create_location(&self.db, &row) {
+                        Ok(_) => self.error = Some(format!("地点 '{}' 已创建在 '{}'", name, world_slug)),
+                        Err(e) => self.error = Some(format!("创建失败: {}", e)),
+                    }
+                } else {
+                    self.error = Some(format!("世界 '{}' 不存在", world_slug));
+                }
+            }
+            "list" | "ls" => {
+                let target = if world_slug.is_empty() {
+                    self.manager.active_world_name().map(|s| s.to_string())
+                } else { Some(world_slug.to_string()) };
+                if let Some(ws) = target {
+                    if let Ok(Some(world)) = db::store::get_world(&self.db, &ws) {
+                        if let Ok(locs) = db::store::list_locations(&self.db, world.id) {
+                            if locs.is_empty() {
+                                self.error = Some(format!("世界 '{}' 暂无地点", ws));
+                            } else {
+                                let list = locs.iter().map(|l| format!("- {} ({})", l.name, l.slug)).collect::<Vec<_>>().join("\n");
+                                self.manager.active_mut().messages.push(Message { role: "system".into(), content: format!("世界 '{}':\n{}", ws, list) });
+                                self.scroll_offset = 0;
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    self.error = Some("请指定世界: /location list <世界>".into());
+                }
+            }
+            _ => {
+                self.error = Some("用法: /location add <世界> <地点> 或 /location list [世界]".into());
+            }
         }
     }
 
