@@ -149,8 +149,43 @@ fn init(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_timeline_world ON timeline(world_id, id);
+
+        CREATE TABLE IF NOT EXISTS character_relations (
+            from_char_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+            to_char_id   INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+            rel_type     TEXT NOT NULL DEFAULT 'neutral',
+            affinity     INTEGER NOT NULL DEFAULT 0,
+            note         TEXT NOT NULL DEFAULT '',
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (from_char_id, to_char_id, rel_type)
+        );
+
+        CREATE TABLE IF NOT EXISTS quests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            title       TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT 'active',
+            world_id    INTEGER REFERENCES worlds(id) ON DELETE CASCADE,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS quest_characters (
+            quest_id     INTEGER NOT NULL REFERENCES quests(id) ON DELETE CASCADE,
+            character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+            role         TEXT NOT NULL DEFAULT 'member',
+            task         TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (quest_id, character_id)
+        );
         "
     )?;
+    // 向后兼容：为旧数据库添加 parent_id 列
+    let has_parent_id: bool = conn
+        .prepare("SELECT parent_id FROM locations LIMIT 0")
+        .is_ok();
+    if !has_parent_id {
+        conn.execute("ALTER TABLE locations ADD COLUMN parent_id INTEGER REFERENCES locations(id) ON DELETE SET NULL", [])?;
+    }
     Ok(())
 }
 
