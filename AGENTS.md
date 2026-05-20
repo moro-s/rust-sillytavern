@@ -37,6 +37,8 @@ cargo run -- --ls
 | `src/db/store.rs` | 全部实体的 CRUD |
 | `src/character/mod.rs` | 角色卡解析（Markdown + YAML 前置信息） |
 | `src/conversation/context.rs` | 系统提示词 + 知识书注入 + 对话历史组装 |
+| `src/skill.rs` | 加载 `sys_skill/*.md` 并注入 system prompt，教 LLM 使用工具 |
+| `sys_skill/*.md` | LLM 工具调用指南（物品/状态/时间/地点管理模式） |
 | `config.toml` | **用户需自行创建**（已 gitignore），LLM 地址/密钥/模型 |
 
 ## 常见陷阱
@@ -72,6 +74,21 @@ CLI 参数 (clap) → main.rs
 ```
 
 多角色流程通过 `conversation::context` 组装 `系统提示词 + 知识书词条 + 对话历史`，然后发送给 LLM。
+
+## sys_skill/ 工具引导系统
+
+`sys_skill/` 目录包含 .md 文件，在每次 LLM 请求时注入 system prompt，教会 LLM 何时以及如何调用 `manage_state` / `advance_time` 工具：
+
+| 文件 | 内容 |
+|------|------|
+| `tool_guide.md` | 核心原则：何时调、怎么调、调哪个 |
+| `item_patterns.md` | 物品增删改查的场景模式与示例 |
+| `state_patterns.md` | 角色状态变化（受伤/中毒/情绪等）的场景模式 |
+| `time_patterns.md` | 时间推进的判断标准与示例 |
+| `location_patterns.md` | 地点追踪的场景模式 |
+| `constraints.md` | 禁止事项（什么情况下不要调用工具） |
+
+**设计原则**：不设规则引擎，不下发正则匹配。所有判断交给 LLM，prompt 只提供方法论和示例。
 
 ## 编码约定
 

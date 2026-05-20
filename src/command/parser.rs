@@ -39,6 +39,16 @@ pub enum Command {
     Time(String),
     /// `/timeline` — view world timeline
     Timeline,
+    /// `/relations [character]` — 查看角色关系图谱
+    Relations(String),
+    /// `/affinity <from> <to> <value>` — 设置好感度
+    Affinity(String),
+    /// `/quests` — 列出任务
+    Quests,
+    /// `/quest <slug> <status>` — 创建/更新任务
+    Quest(String),
+    /// `/task <quest> <text>` — 添加任务描述
+    Task(String),
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -78,6 +88,11 @@ pub fn parse(input: &str) -> (Command, String) {
             "location" | "loc" => (Command::Location(_args.trim().to_string()), String::new()),
             "time" => (Command::Time(_args.trim().to_string()), String::new()),
             "timeline" | "tl" => (Command::Timeline, String::new()),
+            "relations" | "rel" => (Command::Relations(_args.trim().to_string()), String::new()),
+            "affinity" | "aff" => (Command::Affinity(_args.trim().to_string()), String::new()),
+            "quests" | "qs" => (Command::Quests, String::new()),
+            "quest" => (Command::Quest(_args.trim().to_string()), String::new()),
+            "task" => (Command::Task(_args.trim().to_string()), String::new()),
             _ => (Command::None, input.to_string()),
         };
     }

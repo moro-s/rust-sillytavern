@@ -188,14 +188,14 @@ pub fn manage_state_tool() -> Tool {
         tool_type: "function".into(),
         function: ToolFunction {
             name: "manage_state".into(),
-            description: "管理角色/世界/地点状态。增删改查物品、事件、技能、状态、法则。\n用于: 记录新物品、更新角色状态、查询世界信息等。".into(),
+            description: "管理角色/世界状态。增删改查物品、事件、技能、状态、法则、关系、任务。\n用于: 记录新物品、更新角色状态、管理角色关系、推进任务进度等。".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["get", "search", "add", "update", "delete"], "description": "get=获取, search=搜索, add=添加, update=更新, delete=删除"},
-                    "category": {"type": "string", "enum": ["item", "event", "skill", "status", "rule"], "description": "item=物品, event=事件, skill=技能, status=当前状态, rule=世界法则"},
+                    "category": {"type": "string", "enum": ["item", "event", "skill", "status", "rule", "relation", "quest"], "description": "item=物品, event=事件, skill=技能, status=当前状态, rule=世界法则, relation=角色关系, quest=任务"},
                     "key": {"type": "string", "description": "标识名（物品名/技能名/状态名等）"},
-                    "data": {"type": "object", "description": "数据体（添加/更新时使用），如 item: {qty:1, note:\"描述\"}, event: {desc:\"...\", importance:\"high\"}, skill: {desc:\"...\", type:\"passive\"}, status: {detail:\"...\"}"}
+                    "data": {"type": "object", "description": "数据体（添加/更新时使用），如 item: {qty:1, note:\"描述\"}, event: {desc:\"...\", importance:\"high\"}, skill: {desc:\"...\", type:\"passive\"}, status: {detail:\"...\"}, relation: {to:\"角色名\", type:\"friend\", affinity:80}, quest: {title:\"任务名\", status:\"active\", description:\"描述\"}"}
                 },
                 "required": ["action", "category", "key"]
             }),

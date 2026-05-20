@@ -5,6 +5,7 @@ use crate::conversation;
 use crate::db;
 use crate::llm;
 use crate::llm::StreamEvent;
+use crate::skill;
 use crate::tui::selector;
 use crate::tui::ui;
 
@@ -45,6 +46,161 @@ pub struct App {
 pub enum Wizard {
     CreateWorld { slug: String, name: String, step: u8, description: String },
     CreateChar  { slug: String, step: u8, name: String, personality: String, speech_style: String },
+}
+
+/// LLM 工具回调：处理 relation 类别的 manage_state 调用
+fn handle_tool_relation(db: &rusqlite::Connection, action: &str, key: &str, data: &str, char_id: i64) -> String {
+    // 按活动角色筛选关系
+    let filter_by_char = |rels: Vec<db::store::CharacterRelationRow>| {
+        rels.into_iter().filter(|r| r.from_char_id == char_id || r.to_char_id == char_id).collect::<Vec<_>>()
+    };
+    match action {
+        "get" | "search" => {
+            let mut rels = match db::store::list_character_relations(db) {
+                Ok(r) => filter_by_char(r),
+                Err(e) => return format!("查询关系失败: {}", e),
+            };
+            if !key.is_empty() {
+                rels.retain(|r| r.to_name.contains(key) || r.from_name.contains(key));
+            }
+            if rels.is_empty() { return "暂无角色关系".to_string(); }
+            rels.iter().map(|r| {
+                let dir = if r.from_char_id == char_id { format!("→ {}", r.to_name) } else { format!("← {}", r.from_name) };
+                format!("{}: {} (好感度:{})", dir, r.rel_type, r.affinity)
+            }).collect::<Vec<_>>().join("; ")
+        }
+        "add" => {
+            if let Ok(args) = serde_json::from_str::<serde_json::Value>(data) {
+                let to_name = args.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                let rel_type = args.get("type").and_then(|v| v.as_str()).unwrap_or("neutral");
+                let affinity = args.get("affinity").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let note = args.get("note").and_then(|v| v.as_str()).unwrap_or("");
+                if let Ok(Some(target)) = db::store::get_character(db, to_name) {
+                    match db::store::create_character_relation(db, char_id, target.id, rel_type, affinity, note) {
+                        Ok(_) => format!("已设置与 {} 的关系: {} (好感度:{})", to_name, rel_type, affinity),
+                        Err(e) => format!("设置关系失败: {}", e),
+                    }
+                } else { format!("角色 '{}' 不存在", to_name) }
+            } else { "参数格式错误".to_string() }
+        }
+        "update" => {
+            if let Ok(args) = serde_json::from_str::<serde_json::Value>(data) {
+                let to_name = args.get("to").and_then(|v| v.as_str()).unwrap_or(key);
+                let affinity = args.get("affinity").and_then(|v| v.as_i64());
+                let rel_type = args.get("type").and_then(|v| v.as_str());
+                let note = args.get("note").and_then(|v| v.as_str());
+                if let Ok(Some(target)) = db::store::get_character(db, to_name) {
+                    let mut result = String::new();
+                    if let Some(aff) = affinity {
+                        match db::store::update_character_relation_affinity(db, char_id, target.id, "neutral", aff as i32) {
+                            Ok(_) => result.push_str(&format!("好感度已更新为 {}; ", aff)),
+                            Err(e) => result.push_str(&format!("更新好感度失败: {}; ", e)),
+                        }
+                    }
+                    if let Some(rt) = rel_type {
+                        let _ = db.execute(
+                            "UPDATE character_relations SET rel_type=?1 WHERE from_char_id=?2 AND to_char_id=?3",
+                            rusqlite::params![rt, char_id, target.id],
+                        );
+                        result.push_str(&format!("关系类型已更新为 {}; ", rt));
+                    }
+                    if let Some(n) = note {
+                        let _ = db.execute(
+                            "UPDATE character_relations SET note=?1 WHERE from_char_id=?2 AND to_char_id=?3",
+                            rusqlite::params![n, char_id, target.id],
+                        );
+                        result.push_str("备注已更新; ");
+                    }
+                    if result.is_empty() { "无更新内容".to_string() } else { format!("与 {} 的关系已更新: {}", to_name, result) }
+                } else { format!("角色 '{}' 不存在", to_name) }
+            } else { "参数格式错误".to_string() }
+        }
+        "delete" => {
+            if let Ok(Some(target)) = db::store::get_character(db, key) {
+                let _ = db.execute(
+                    "DELETE FROM character_relations WHERE from_char_id=?1 AND to_char_id=?2",
+                    rusqlite::params![char_id, target.id],
+                );
+                format!("已删除与 {} 的关系", key)
+            } else { format!("角色 '{}' 不存在", key) }
+        }
+        _ => format!("不支持的操作: {}", action),
+    }
+}
+
+/// LLM 工具回调：处理 quest 类别的 manage_state 调用
+fn handle_tool_quest(db: &rusqlite::Connection, action: &str, key: &str, data: &str, char_id: i64) -> String {
+    match action {
+        "get" | "search" => {
+            let quests = db::store::list_quests(db, 0).unwrap_or_default();
+            if quests.is_empty() { return "暂无任务".to_string(); }
+            if key.is_empty() {
+                quests.iter().map(|q| format!("[{}] {}: {}", q.status, q.title, q.description)).collect::<Vec<_>>().join("; ")
+            } else {
+                quests.iter().filter(|q| q.title.contains(key) || q.description.contains(key))
+                    .map(|q| format!("[{}] {}: {}", q.status, q.title, q.description))
+                    .collect::<Vec<_>>().join("; ")
+            }
+        }
+        "add" => {
+            if let Ok(args) = serde_json::from_str::<serde_json::Value>(data) {
+                let title = args.get("title").and_then(|v| v.as_str()).unwrap_or(key);
+                let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+                let desc = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                match db::store::create_quest(db, title, desc, status, None) {
+                    Ok(qid) => {
+                        let _ = db::store::link_quest_character(db, qid, char_id, "participant", "");
+                        format!("任务 '{}' 已创建 (ID:{})，状态: {}", title, qid, status)
+                    }
+                    Err(e) => format!("创建任务失败: {}", e),
+                }
+            } else { "参数格式错误".to_string() }
+        }
+        "update" => {
+            if let Ok(args) = serde_json::from_str::<serde_json::Value>(data) {
+                let status = args.get("status").and_then(|v| v.as_str());
+                let desc = args.get("description").and_then(|v| v.as_str());
+                // key 应为任务 ID 或标题关键词搜索
+                let quest_id: i64 = key.parse().unwrap_or(0);
+                let target = if quest_id > 0 {
+                    db::store::get_quest(db, quest_id)
+                } else {
+                    // 按标题搜索
+                    let quests = db::store::list_quests(db, 0).unwrap_or_default();
+                    quests.iter().find(|q| q.title.contains(key) || q.description.contains(key))
+                        .and_then(|q| db::store::get_quest(db, q.id).ok().flatten())
+                        .map_or(Ok(None), |v| Ok(Some(v)))
+                };
+                match target {
+                    Ok(Some(quest)) => {
+                        let mut result = String::new();
+                        if let Some(s) = status {
+                            if let Ok(_) = db::store::update_quest_status(db, quest.0.id, s) {
+                                result.push_str(&format!("状态已更新为 {}; ", s));
+                            }
+                        }
+                        if let Some(d) = desc {
+                            let _ = db.execute("UPDATE quests SET description=?1 WHERE id=?2", rusqlite::params![d, quest.0.id]);
+                            result.push_str("描述已更新; ");
+                        }
+                        if result.is_empty() { "无更新内容".to_string() } else { format!("任务 '{}': {}", quest.0.title, result) }
+                    }
+                    _ => format!("任务 '{}' 不存在，请先创建", key),
+                }
+            } else { "参数格式错误".to_string() }
+        }
+        "delete" => {
+            let quest_id: i64 = match key.parse() {
+                Ok(id) => id,
+                Err(_) => return format!("请提供任务 ID 来删除"),
+            };
+            match db::store::delete_quest(db, quest_id) {
+                Ok(_) => format!("任务 {} 已删除", quest_id),
+                Err(e) => format!("删除失败: {}", e),
+            }
+        }
+        _ => format!("不支持的操作: {}", action),
+    }
 }
 
 fn build_lore_text(entries: &[&db::store::LoreRow]) -> String {
@@ -205,6 +361,11 @@ impl App {
             command::parser::Command::Location(args) => { self.handle_location(&args); return; }
             command::parser::Command::Time(args) => { self.handle_time(&args); return; }
             command::parser::Command::Timeline => { self.handle_timeline(); return; }
+            command::parser::Command::Relations(args) => { self.handle_relations(&args); return; }
+            command::parser::Command::Affinity(args) => { self.handle_affinity(&args); return; }
+            command::parser::Command::Quests => { self.handle_quests(); return; }
+            command::parser::Command::Quest(args) => { self.handle_quest(&args); return; }
+            command::parser::Command::Task(args) => { self.handle_task(&args); return; }
             command::parser::Command::Info(name) => {
                 if let Some(c) = db::store::get_character(&self.db, name.trim()).ok().flatten() {
                     self.manager.active_mut().messages.push(Message {
@@ -432,7 +593,7 @@ impl App {
             "add" | "create" => {
                 if world_slug.is_empty() || rest.is_empty() { self.error = Some("用法: /location add <世界> <地点>".into()); return; }
                 if let Ok(Some(world)) = db::store::get_world(&self.db, world_slug) {
-                    let row = db::store::LocationRow { id: 0, slug: rest.to_string(), name: rest.to_string(), description: String::new(), connects_to: String::new(), world_id: world.id };
+                    let row = db::store::LocationRow { id: 0, slug: rest.to_string(), name: rest.to_string(), description: String::new(), connects_to: String::new(), parent_id: None, world_id: world.id };
                     match db::store::create_location(&self.db, &row) {
                         Ok(_) => self.error = Some(format!("地点 '{}' 已创建", rest)),
                         Err(e) => self.error = Some(format!("创建失败: {}", e)),
@@ -505,6 +666,159 @@ impl App {
                 }
             }
             Err(e) => self.error = Some(format!("读取时间线失败: {}", e)),
+        }
+    }
+
+    // ── 角色关系 ──
+    pub fn handle_relations(&mut self, args: &str) {
+        let relations = if args.trim().is_empty() {
+            // 列出所有关系，筛选涉及当前角色的
+            let all = db::store::list_character_relations(&self.db).unwrap_or_default();
+            let char_id = self.manager.active().id;
+            all.into_iter().filter(|r| r.from_char_id == char_id || r.to_char_id == char_id).collect::<Vec<_>>()
+        } else {
+            // 查指定角色相关的关系
+            db::store::find_character_relations(&self.db, args.trim()).unwrap_or_default()
+        };
+        if relations.is_empty() {
+            self.error = Some("没有找到角色关系".into());
+        } else {
+            let text = relations.iter()
+                .map(|r| format!("{} → {}（{}，好感度: {}）{}", r.from_name, r.to_name, r.rel_type, r.affinity, if !r.note.is_empty() { format!(" - {}", r.note) } else { String::new() }))
+                .collect::<Vec<_>>().join("\n");
+            self.manager.active_mut().messages.push(Message { role: "system".into(), content: format!("角色关系图谱:\n{}", text) });
+            self.scroll_offset = 0;
+        }
+    }
+
+    /// 设置好感度: /affinity <to> <value> [note]
+    pub fn handle_affinity(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(3, ' ').collect();
+        let to_name = parts.first().map(|s| *s).unwrap_or("");
+        let value_str = parts.get(1).map(|s| *s).unwrap_or("");
+        let _note = parts.get(2).unwrap_or(&"");
+        if to_name.is_empty() || value_str.is_empty() {
+            self.error = Some("用法: /affinity <角色名> <好感度> [备注]".into());
+            return;
+        }
+        let affinity: i32 = match value_str.parse() {
+            Ok(v) if (-100..=100).contains(&v) => v,
+            _ => { self.error = Some("好感度范围: -100 ~ 100".into()); return; }
+        };
+        let char_id = self.manager.active().id;
+        if let Ok(Some(target)) = db::store::get_character(&self.db, to_name) {
+            match db::store::update_character_relation_affinity(&self.db, char_id, target.id, "neutral", affinity) {
+                Ok(_) => self.error = Some(format!("已设置对 {} 的好感度为 {}", to_name, affinity)),
+                Err(e) => self.error = Some(format!("设置失败: {}", e)),
+            }
+        } else {
+            self.error = Some(format!("角色 '{}' 不存在", to_name));
+        }
+    }
+
+    // ── 任务系统 ──
+    pub fn handle_quests(&mut self) {
+        let world_id = self.manager.active_world.map(|i| self.manager.worlds[i].id).unwrap_or(0);
+        match db::store::list_quests(&self.db, world_id) {
+            Ok(quests) if quests.is_empty() => self.error = Some("暂无任务".into()),
+            Ok(quests) => {
+                let text = quests.iter()
+                    .map(|q| format!("[#{}] [{}] {} - {}", q.id, q.status, q.title, q.description))
+                    .collect::<Vec<_>>().join("\n");
+                self.manager.active_mut().messages.push(Message { role: "system".into(), content: format!("任务列表:\n{}", text) });
+                self.scroll_offset = 0;
+            }
+            Err(e) => self.error = Some(format!("查询失败: {}", e)),
+        }
+    }
+
+    /// /quest add <title> | del <id> | do <id> | fail <id> | info <id>
+    pub fn handle_quest(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(2, ' ').collect();
+        let action = parts.first().map(|s| *s).unwrap_or("");
+        let rest = parts.get(1).unwrap_or(&"").trim();
+        match action {
+            "add" | "create" => {
+                if rest.is_empty() { self.error = Some("用法: /quest add <标题>".into()); return; }
+                let world_id = self.manager.active_world.map(|i| self.manager.worlds[i].id);
+                let char_id = self.manager.active().id;
+                match db::store::create_quest(&self.db, rest, "", "active", world_id) {
+                    Ok(qid) => {
+                        let _ = db::store::link_quest_character(&self.db, qid, char_id, "participant", "");
+                        self.error = Some(format!("任务 '{}' 已创建 (ID:{})", rest, qid));
+                    }
+                    Err(e) => self.error = Some(format!("创建失败: {}", e)),
+                }
+            }
+            "del" | "delete" => {
+                let id: i64 = match rest.parse() { Ok(v) => v, _ => { self.error = Some("用法: /quest del <任务ID>".into()); return; } };
+                match db::store::delete_quest(&self.db, id) {
+                    Ok(_) => self.error = Some(format!("任务 {} 已删除", id)),
+                    Err(e) => self.error = Some(format!("删除失败: {}", e)),
+                }
+            }
+            "do" | "complete" => {
+                let id: i64 = match rest.parse() { Ok(v) => v, _ => { self.error = Some("用法: /quest do <任务ID>".into()); return; } };
+                match db::store::update_quest_status(&self.db, id, "completed") {
+                    Ok(_) => self.error = Some(format!("任务 {} 标记为已完成", id)),
+                    Err(e) => self.error = Some(format!("更新失败: {}", e)),
+                }
+            }
+            "fail" => {
+                let id: i64 = match rest.parse() { Ok(v) => v, _ => { self.error = Some("用法: /quest fail <任务ID>".into()); return; } };
+                match db::store::update_quest_status(&self.db, id, "failed") {
+                    Ok(_) => self.error = Some(format!("任务 {} 标记为已失败", id)),
+                    Err(e) => self.error = Some(format!("更新失败: {}", e)),
+                }
+            }
+            "info" | _ => {
+                let id: i64 = match rest.parse() { Ok(v) => v, _ => {
+                    if rest.is_empty() { self.error = Some("用法: /quest info <任务ID>".into()); return; }
+                    0
+                }};
+                if id == 0 {
+                    self.error = Some("用法: /quest <add|del|do|fail|info> <参数>".into());
+                    return;
+                }
+                match db::store::get_quest(&self.db, id) {
+                    Ok(Some(quest)) => {
+                        let chars = quest.1.iter().map(|l| l.character_name.clone()).collect::<Vec<_>>().join(", ");
+                        self.manager.active_mut().messages.push(Message {
+                            role: "system".into(),
+                            content: format!("任务详情 (#{}):\n标题: {}\n状态: {}\n描述: {}\n参与者: {}",
+                                quest.0.id, quest.0.title, quest.0.status, quest.0.description, chars),
+                        });
+                        self.scroll_offset = 0;
+                    }
+                    _ => self.error = Some(format!("任务 {} 不存在", id)),
+                }
+            }
+        }
+    }
+
+    /// /task <quest_id> <text> — 给任务添加描述
+    pub fn handle_task(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(2, ' ').collect();
+        let id_str = parts.first().map(|s| *s).unwrap_or("");
+        let text = parts.get(1).unwrap_or(&"");
+        let quest_id: i64 = match id_str.parse() {
+            Ok(v) => v,
+            _ => { self.error = Some("用法: /task <任务ID> <描述>".into()); return; }
+        };
+        if text.is_empty() {
+            self.error = Some("用法: /task <任务ID> <描述>".into());
+            return;
+        }
+        match db::store::get_quest(&self.db, quest_id) {
+            Ok(Some(quest)) => {
+                let new_desc = format!("{}\n{}", quest.0.description, text).trim().to_string();
+                let _ = self.db.execute(
+                    "UPDATE quests SET description=?1 WHERE id=?2",
+                    rusqlite::params![new_desc, quest_id],
+                );
+                self.error = Some(format!("已添加到任务 {}: {}", quest_id, text));
+            }
+            _ => self.error = Some(format!("任务 {} 不存在，请先 /quest add <标题> 创建", id_str)),
         }
     }
 
@@ -771,6 +1085,22 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                                 if !summary.is_empty() { system_prompt.push_str(&format!("\n\n【当前角色动态状态】\n{}", summary)); }
                             }
 
+                            // 注入角色关系图谱
+                            let char_id = app.manager.active().id;
+                            if let Ok(rels) = db::store::list_character_relations(&app.db) {
+                                let filtered: Vec<_> = rels.into_iter().filter(|r| r.from_char_id == char_id || r.to_char_id == char_id).collect();
+                                let rel_text: Vec<_> = filtered.iter().map(|r| format!("→ {}（{}，好感度: {}）", r.to_name, r.rel_type, r.affinity)).collect();
+                                if !rel_text.is_empty() {
+                                    system_prompt.push_str(&format!("\n\n【角色关系】\n{}", rel_text.join("\n")));
+                                }
+                            }
+
+                            // 注入 sys_skill/ 工具使用引导
+                            let skill_text = skill::load();
+                            if !skill_text.is_empty() {
+                                system_prompt.push_str(&format!("\n\n---\n【工具使用指南】\n{}", skill_text));
+                            }
+
                             let llm_config = cfg.llm.clone();
                             let recent_text: String = app.manager.active().messages.iter().rev().take(5).map(|m| m.content.as_str()).collect::<Vec<_>>().join(" ");
                             // Scan lore (from DB now)
@@ -818,12 +1148,19 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                                             let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
                                             let data = args.get("data").map(|v| v.to_string()).unwrap_or_default();
                                             let tl_id = db::store::current_timeline(&db, 1).ok().flatten().map(|t| t.id);
-                                            match db::store::manage_state(
-                                                &db, "character_states", char_id,
-                                                action, category, key, &data, tl_id
-                                            ) {
-                                                Ok(result) => result,
-                                                Err(e) => format!("Error: {}", e),
+                                            // 分流：relation 走关系表，quest 走任务表
+                                            if category == "relation" {
+                                                handle_tool_relation(&db, action, key, &data, char_id)
+                                            } else if category == "quest" {
+                                                handle_tool_quest(&db, action, key, &data, char_id)
+                                            } else {
+                                                match db::store::manage_state(
+                                                    &db, "character_states", char_id,
+                                                    action, category, key, &data, tl_id
+                                                ) {
+                                                    Ok(result) => result,
+                                                    Err(e) => format!("Error: {}", e),
+                                                }
                                             }
                                         } else { "Invalid arguments".to_string() }
                                     } else if tool_name == "advance_time" {

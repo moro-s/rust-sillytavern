@@ -132,13 +132,14 @@ pub struct LocationRow {
     pub name: String,
     pub description: String,
     pub connects_to: String,
+    pub parent_id: Option<i64>,
     pub world_id: i64,
 }
 
 pub fn list_locations(conn: &Connection, world_id: i64) -> anyhow::Result<Vec<LocationRow>> {
-    let mut stmt = conn.prepare("SELECT id, slug, name, description, connects_to, world_id FROM locations WHERE world_id=?1 ORDER BY slug")?;
+    let mut stmt = conn.prepare("SELECT id, slug, name, description, connects_to, parent_id, world_id FROM locations WHERE world_id=?1 ORDER BY slug")?;
     let rows = stmt.query_map(params![world_id], |row| {
-        Ok(LocationRow { id: row.get(0)?, slug: row.get(1)?, name: row.get(2)?, description: row.get(3)?, connects_to: row.get(4)?, world_id: row.get(5)? })
+        Ok(LocationRow { id: row.get(0)?, slug: row.get(1)?, name: row.get(2)?, description: row.get(3)?, connects_to: row.get(4)?, parent_id: row.get(5)?, world_id: row.get(6)? })
     })?.filter_map(|r| r.ok()).collect();
     Ok(rows)
 }
@@ -147,6 +148,15 @@ pub fn create_location(conn: &Connection, row: &LocationRow) -> anyhow::Result<i
     conn.execute("INSERT INTO locations (slug, name, description, connects_to, world_id) VALUES (?1,?2,?3,?4,?5)",
         params![row.slug, row.name, row.description, row.connects_to, row.world_id])?;
     Ok(conn.last_insert_rowid())
+}
+
+/// 查询某个地点的所有子地点（直接子节点）
+pub fn get_location_children(conn: &Connection, parent_id: i64) -> anyhow::Result<Vec<LocationRow>> {
+    let mut stmt = conn.prepare("SELECT id, slug, name, description, connects_to, parent_id, world_id FROM locations WHERE parent_id=?1 ORDER BY slug")?;
+    let rows = stmt.query_map(params![parent_id], |row| {
+        Ok(LocationRow { id: row.get(0)?, slug: row.get(1)?, name: row.get(2)?, description: row.get(3)?, connects_to: row.get(4)?, parent_id: row.get(5)?, world_id: row.get(6)? })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
 }
 
 // ──────────────────────────────────────────────
