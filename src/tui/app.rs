@@ -199,6 +199,7 @@ impl App {
             command::parser::Command::SetSelf(text) => { self.handle_set_self(&text); return; }
             command::parser::Command::ManageState(args) => { self.handle_manage_state(&args); return; }
             command::parser::Command::Export => { self.handle_export(); return; }
+            command::parser::Command::Import(args) => { self.handle_import(&args); return; }
             command::parser::Command::World(name) => { self.handle_switch_world(&name); return; }
             command::parser::Command::Link(char_name, world_name) => { self.handle_link(&char_name, &world_name); return; }
             command::parser::Command::Location(args) => { self.handle_location(&args); return; }
@@ -474,6 +475,87 @@ impl App {
         }
     }
 
+    /// Import from .md files: /import <type> <slug> <path>
+    /// Types: char, world, lore
+    pub fn handle_import(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(3, ' ').collect();
+        let import_type = parts.first().map(|s| *s).unwrap_or("");
+        let slug = parts.get(1).map(|s| *s).unwrap_or("");
+        let path = parts.get(2).map(|s| *s).unwrap_or("");
+
+        if import_type.is_empty() || slug.is_empty() {
+            self.error = Some("用法: /import char <slug> <path.md> 或 /import world <slug> <path.md> 或 /import lore <key> <path.md>".into());
+            return;
+        }
+
+        let file_path = if path.is_empty() {
+            match import_type {
+                "char" | "character" => format!("characters/{}.md", slug),
+                "world" => format!("worlds/{}/world.md", slug),
+                "lore" => format!("lorebooks/{}.md", slug),
+                _ => { self.error = Some(format!("未知类型: {}", import_type)); return; }
+            }
+        } else { path.to_string() };
+
+        let content = match std::fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(e) => { self.error = Some(format!("无法读取 {}: {}", file_path, e)); return; }
+        };
+
+        match import_type {
+            "char" | "character" => {
+                let (meta, body) = parse_md_frontmatter(&content);
+                let row = db::store::CharacterRow {
+                    id: 0, slug: slug.to_string(),
+                    name: meta.get("name").unwrap_or(&slug.to_string()).clone(),
+                    personality: meta.get("personality").unwrap_or(&String::new()).clone(),
+                    speech_style: meta.get("speech_style").unwrap_or(&String::new()).clone(),
+                    first_message: meta.get("first_message").unwrap_or(&String::new()).clone(),
+                    background: body,
+                };
+                match db::store::create_character(&self.db, &row) {
+                    Ok(_) => {
+                        let active = self.manager.active_name().to_string();
+                        if let Ok(m) = CharacterManager::load_all(&self.db, &active, self.manager.active_world_name()) { self.manager = m; }
+                        self.error = Some(format!("角色 '{}' 已导入", slug));
+                    }
+                    Err(e) => self.error = Some(format!("导入失败: {}", e)),
+                }
+            }
+            "world" => {
+                let (meta, body) = parse_md_frontmatter(&content);
+                let row = db::store::WorldRow {
+                    id: 0, slug: slug.to_string(),
+                    name: meta.get("name").unwrap_or(&slug.to_string()).clone(),
+                    description: meta.get("description").unwrap_or(&String::new()).clone(),
+                    overview: body,
+                };
+                match db::store::create_world(&self.db, &row) {
+                    Ok(_) => self.error = Some(format!("世界 '{}' 已导入", slug)),
+                    Err(e) => self.error = Some(format!("导入失败: {}", e)),
+                }
+            }
+            "lore" => {
+                // Parse markdown table for lore
+                let key = slug.to_string();
+                let mut triggers = Vec::new();
+                let mut lore_content = String::new();
+                let mut priority = 5i32;
+                for line in content.lines() {
+                    let t = line.trim();
+                    if t.starts_with("| triggers") { if let Some(v) = t.split('|').nth(2) { triggers = v.trim().split(',').map(|s| s.trim().to_string()).collect(); } }
+                    if t.starts_with("| priority") { if let Some(v) = t.split('|').nth(2) { priority = v.trim().parse().unwrap_or(5); } }
+                    if !t.starts_with('|') && !t.starts_with('#') && !t.is_empty() { lore_content.push_str(t); lore_content.push('\n'); }
+                }
+                match db::store::create_lore(&self.db, &key, &triggers, &lore_content, priority, false) {
+                    Ok(_) => self.error = Some(format!("词条 '{}' 已导入", key)),
+                    Err(e) => self.error = Some(format!("导入失败: {}", e)),
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn handle_export(&mut self) {
         let mut count = 0;
         if let Ok(chars) = db::store::list_characters(&self.db) {
@@ -506,6 +588,28 @@ impl App {
     pub fn lore_entries(&self) -> Vec<db::store::LoreRow> {
         db::store::list_lore(&self.db).unwrap_or_default()
     }
+}
+
+/// Parse YAML frontmatter from .md content. Returns (meta map, body).
+fn parse_md_frontmatter(content: &str) -> (std::collections::HashMap<String, String>, String) {
+    let mut meta = std::collections::HashMap::new();
+    let body;
+    if let Some(rest) = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n")) {
+        if let Some(end) = rest.find("\n---") {
+            let yaml_str = &rest[..end];
+            body = rest[end + 4..].trim().to_string();
+            for line in yaml_str.lines() {
+                if let Some((k, v)) = line.split_once(':') {
+                    meta.insert(k.trim().to_string(), v.trim().to_string());
+                }
+            }
+        } else {
+            body = content.to_string();
+        }
+    } else {
+        body = content.to_string();
+    }
+    (meta, body)
 }
 
 fn create_new_session(db: &Connection, manager: &CharacterManager, world: Option<&str>) -> anyhow::Result<i64> {
@@ -595,7 +699,22 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                             if !app.self_persona.is_empty() {
                                 system_prompt.push_str(&format!("\n\n【当前对话对象的设定】\n{}", app.self_persona));
                             }
-                            // State summary from DB
+                            // Inject world-level context (events, rules) if active world
+                            if let Some(widx) = app.manager.active_world {
+                                if let Some(world) = app.manager.worlds.get(widx) {
+                                    if let Ok(states) = db::store::list_states(&app.db, "world_states", world.id) {
+                                        let events: Vec<_> = states.iter().filter(|(c,_,_)| c=="event").map(|(_,k,d)| format!("{}:{}", k, d)).collect();
+                                        let rules: Vec<_> = states.iter().filter(|(c,_,_)| c=="rule").map(|(_,k,d)| format!("{}:{}", k, d)).collect();
+                                        if !events.is_empty() || !rules.is_empty() {
+                                            system_prompt.push_str("\n\n【世界全局信息】\n");
+                                            if !events.is_empty() { system_prompt.push_str(&format!("当前事件: {}\n", events.join("; "))); }
+                                            if !rules.is_empty() { system_prompt.push_str(&format!("世界法则: {}\n", rules.join("; "))); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Inject character state summary
                             if let Ok(states) = db::store::list_states(&app.db, "character_states", app.manager.active().id) {
                                 let items: Vec<_> = states.iter().filter(|(c,_,_)| c=="item").map(|(_,k,d)| format!("{}:{}", k, d)).collect();
                                 let sts: Vec<_> = states.iter().filter(|(c,_,_)| c=="status").map(|(_,k,d)| format!("{}:{}", k, d)).collect();

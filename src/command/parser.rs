@@ -27,6 +27,8 @@ pub enum Command {
     ManageState(String),
     /// `/export` — export to .md files
     Export,
+    /// `/import <type> <slug> <path>` — import from .md files
+    Import(String),
     /// `/world <name>` — switch world
     World(String),
     /// `/link <char> <world>` — link character to world
@@ -63,6 +65,7 @@ pub fn parse(input: &str) -> (Command, String) {
             "self" => (Command::SetSelf(_args.trim().to_string()), String::new()),
             "state" => (Command::ManageState(_args.trim().to_string()), String::new()),
             "export" | "exp" => (Command::Export, String::new()),
+            "import" | "imp" => (Command::Import(_args.trim().to_string()), String::new()),
             "world" | "w" => (Command::World(_args.trim().to_string()), String::new()),
             "link" => {
                 let (char_name, world_name) = _args.split_once(' ').unwrap_or((_args, ""));
