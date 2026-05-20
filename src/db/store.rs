@@ -391,3 +391,262 @@ pub fn set_persona(conn: &Connection, text: &str) -> anyhow::Result<()> {
     conn.execute("UPDATE user_persona SET value=?1 WHERE key='self'", params![text])?;
     Ok(())
 }
+
+// ──────────────────────────────────────────────
+// 角色关系谱（character_relations）
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CharacterRelationRow {
+    pub from_char_id: i64,
+    pub from_name: String,
+    pub to_char_id: i64,
+    pub to_name: String,
+    pub rel_type: String,
+    pub affinity: i32,
+    pub note: String,
+    pub created_at: String,
+}
+
+/// 列出所有角色关系（联结角色名）
+pub fn list_character_relations(conn: &Connection) -> anyhow::Result<Vec<CharacterRelationRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT cr.from_char_id, ca.name, cr.to_char_id, cb.name,
+                cr.rel_type, cr.affinity, cr.note, cr.created_at
+         FROM character_relations cr
+         JOIN characters ca ON ca.id = cr.from_char_id
+         JOIN characters cb ON cb.id = cr.to_char_id
+         ORDER BY ca.name, cb.name"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(CharacterRelationRow {
+            from_char_id: row.get(0)?,
+            from_name: row.get(1)?,
+            to_char_id: row.get(2)?,
+            to_name: row.get(3)?,
+            rel_type: row.get(4)?,
+            affinity: row.get(5)?,
+            note: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
+}
+
+/// 根据角色 slug 查找涉及的关系
+pub fn find_character_relations(conn: &Connection, slug: &str) -> anyhow::Result<Vec<CharacterRelationRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT cr.from_char_id, ca.name, cr.to_char_id, cb.name,
+                cr.rel_type, cr.affinity, cr.note, cr.created_at
+         FROM character_relations cr
+         JOIN characters ca ON ca.id = cr.from_char_id
+         JOIN characters cb ON cb.id = cr.to_char_id
+         WHERE ca.slug = ?1 OR cb.slug = ?1
+         ORDER BY ca.name, cb.name"
+    )?;
+    let rows = stmt.query_map(params![slug], |row| {
+        Ok(CharacterRelationRow {
+            from_char_id: row.get(0)?,
+            from_name: row.get(1)?,
+            to_char_id: row.get(2)?,
+            to_name: row.get(3)?,
+            rel_type: row.get(4)?,
+            affinity: row.get(5)?,
+            note: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
+}
+
+/// 创建角色关系
+pub fn create_character_relation(
+    conn: &Connection,
+    from_char_id: i64,
+    to_char_id: i64,
+    rel_type: &str,
+    affinity: i32,
+    note: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO character_relations (from_char_id, to_char_id, rel_type, affinity, note) VALUES (?1,?2,?3,?4,?5)",
+        params![from_char_id, to_char_id, rel_type, affinity, note],
+    )?;
+    Ok(())
+}
+
+/// 按 rowid 删除角色关系
+pub fn delete_character_relation(conn: &Connection, rowid: i64) -> anyhow::Result<()> {
+    conn.execute("DELETE FROM character_relations WHERE rowid=?1", params![rowid])?;
+    Ok(())
+}
+
+/// 更新角色关系的亲和度
+pub fn update_character_relation_affinity(
+    conn: &Connection,
+    from_char_id: i64,
+    to_char_id: i64,
+    rel_type: &str,
+    affinity: i32,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE character_relations SET affinity=?1 WHERE from_char_id=?2 AND to_char_id=?3 AND rel_type=?4",
+        params![affinity, from_char_id, to_char_id, rel_type],
+    )?;
+    Ok(())
+}
+
+// ──────────────────────────────────────────────
+// 任务系统（quests）
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct QuestRow {
+    pub id: i64,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub world_id: Option<i64>,
+    pub world_name: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuestCharacterLink {
+    pub quest_id: i64,
+    pub character_id: i64,
+    pub character_name: String,
+    pub role: String,
+    pub task: String,
+}
+
+/// 列出某世界的任务
+pub fn list_quests(conn: &Connection, world_id: i64) -> anyhow::Result<Vec<QuestRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT q.id, q.title, q.description, q.status, q.world_id,
+                COALESCE(w.name, ''),
+                q.created_at, q.updated_at
+         FROM quests q
+         LEFT JOIN worlds w ON w.id = q.world_id
+         WHERE q.world_id = ?1
+         ORDER BY q.title"
+    )?;
+    let rows = stmt.query_map(params![world_id], |row| {
+        Ok(QuestRow {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            description: row.get(2)?,
+            status: row.get(3)?,
+            world_id: row.get(4)?,
+            world_name: {
+                let w: String = row.get(5)?;
+                if w.is_empty() { None } else { Some(w) }
+            },
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
+}
+
+/// 获取任务详情（含参与角色）
+pub fn get_quest(conn: &Connection, quest_id: i64) -> anyhow::Result<Option<(QuestRow, Vec<QuestCharacterLink>)>> {
+    let quest = conn.query_row(
+        "SELECT q.id, q.title, q.description, q.status, q.world_id,
+                COALESCE(w.name, ''),
+                q.created_at, q.updated_at
+         FROM quests q
+         LEFT JOIN worlds w ON w.id = q.world_id
+         WHERE q.id = ?1",
+        params![quest_id],
+        |row| {
+            Ok(QuestRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+                world_id: row.get(4)?,
+                world_name: {
+                    let w: String = row.get(5)?;
+                    if w.is_empty() { None } else { Some(w) }
+                },
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        },
+    ).ok();
+    match quest {
+        None => Ok(None),
+        Some(q) => {
+            let members = list_quest_characters(conn, quest_id)?;
+            Ok(Some((q, members)))
+        }
+    }
+}
+
+/// 列出任务关联的角色
+pub fn list_quest_characters(conn: &Connection, quest_id: i64) -> anyhow::Result<Vec<QuestCharacterLink>> {
+    let mut stmt = conn.prepare(
+        "SELECT qc.quest_id, qc.character_id, c.name, qc.role, qc.task
+         FROM quest_characters qc
+         JOIN characters c ON c.id = qc.character_id
+         WHERE qc.quest_id = ?1
+         ORDER BY c.name"
+    )?;
+    let rows = stmt.query_map(params![quest_id], |row| {
+        Ok(QuestCharacterLink {
+            quest_id: row.get(0)?,
+            character_id: row.get(1)?,
+            character_name: row.get(2)?,
+            role: row.get(3)?,
+            task: row.get(4)?,
+        })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
+}
+
+/// 创建任务
+pub fn create_quest(
+    conn: &Connection,
+    title: &str,
+    description: &str,
+    status: &str,
+    world_id: Option<i64>,
+) -> anyhow::Result<i64> {
+    conn.execute(
+        "INSERT INTO quests (title, description, status, world_id) VALUES (?1,?2,?3,?4)",
+        params![title, description, status, world_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 更新任务状态
+pub fn update_quest_status(conn: &Connection, quest_id: i64, status: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE quests SET status=?1, updated_at=datetime('now') WHERE id=?2",
+        params![status, quest_id],
+    )?;
+    Ok(())
+}
+
+/// 任务关联角色
+pub fn link_quest_character(
+    conn: &Connection,
+    quest_id: i64,
+    character_id: i64,
+    role: &str,
+    task: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO quest_characters (quest_id, character_id, role, task) VALUES (?1,?2,?3,?4)",
+        params![quest_id, character_id, role, task],
+    )?;
+    Ok(())
+}
+
+/// 删除任务（同时级联删除 quest_characters）
+pub fn delete_quest(conn: &Connection, quest_id: i64) -> anyhow::Result<()> {
+    conn.execute("DELETE FROM quests WHERE id=?1", params![quest_id])?;
+    Ok(())
+}
