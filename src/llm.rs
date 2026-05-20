@@ -132,6 +132,7 @@ pub async fn chat_with_messages(
     messages: &[ChatMessage],
 ) -> anyhow::Result<String> {
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+    log::debug!("LLM 非流式请求: url={}, model={}, messages={}", url, config.model, messages.len());
 
     let body = ChatRequest {
         model: config.model.clone(),
@@ -340,6 +341,7 @@ async fn stream_impl(
     mut cancel: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> anyhow::Result<()> {
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+    log::debug!("LLM 流式请求: url={}, model={}, messages={}", url, config.model, messages.len());
 
     let body = ChatRequest {
         model: config.model.clone(),
@@ -400,6 +402,7 @@ async fn stream_impl(
 
                 let data = &line[6..];
                 if data == "[DONE]" {
+                    log::info!("LLM 流式完成, 共计 {} 字", full_text.chars().count());
                     let _ = tx.send(StreamEvent::Done(full_text));
                     return Ok(());
                 }
@@ -434,6 +437,7 @@ async fn stream_impl(
 
                 let data = &line[6..];
                 if data == "[DONE]" {
+                    log::info!("LLM 流式完成, 共计 {} 字", full_text.chars().count());
                     let _ = tx.send(StreamEvent::Done(full_text));
                     return Ok(());
                 }
@@ -458,6 +462,7 @@ async fn stream_impl(
     }
 
     // Stream ended without [DONE]
+    log::info!("LLM 流式完成(无DONE标记), 共计 {} 字", full_text.chars().count());
     let _ = tx.send(StreamEvent::Done(full_text));
     Ok(())
 }
