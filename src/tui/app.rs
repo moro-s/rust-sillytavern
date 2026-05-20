@@ -63,12 +63,12 @@ fn build_lore_text(entries: &[&db::store::LoreRow]) -> String {
 impl App {
     pub fn new(
         character_name: &str,
-        _world: Option<&str>,
+        world: Option<&str>,
         resume_id: Option<i64>,
         new_session: bool,
     ) -> anyhow::Result<Self> {
         let db = db::schema::open()?;
-        let mut manager = CharacterManager::load_all(&db, character_name)?;
+        let mut manager = CharacterManager::load_all(&db, character_name, world)?;
         let self_persona = db::store::get_persona(&db)?;
 
         // Session handling
@@ -86,10 +86,10 @@ impl App {
                     }
                     (id, 0)
                 }
-                _ => (create_new_session(&db, &manager, _world)?, 0),
+                _ => (create_new_session(&db, &manager, world)?, 0),
             }
         } else if new_session {
-            (create_new_session(&db, &manager, _world)?, 0)
+            (create_new_session(&db, &manager, world)?, 0)
         } else {
             let id = match db::store::list_sessions(&db) {
                 Ok(sessions) => {
@@ -103,12 +103,12 @@ impl App {
                                 }
                                 s.id
                             }
-                            Err(_) => create_new_session(&db, &manager, _world)?,
+                            Err(_) => create_new_session(&db, &manager, world)?,
                         },
-                        None => create_new_session(&db, &manager, _world)?,
+                        None => create_new_session(&db, &manager, world)?,
                     }
                 }
-                Err(_) => create_new_session(&db, &manager, _world)?,
+                Err(_) => create_new_session(&db, &manager, world)?,
             };
             (id, 0)
         };
@@ -199,6 +199,8 @@ impl App {
             command::parser::Command::SetSelf(text) => { self.handle_set_self(&text); return; }
             command::parser::Command::ManageState(args) => { self.handle_manage_state(&args); return; }
             command::parser::Command::Export => { self.handle_export(); return; }
+            command::parser::Command::World(name) => { self.handle_switch_world(&name); return; }
+            command::parser::Command::Link(char_name, world_name) => { self.handle_link(&char_name, &world_name); return; }
             command::parser::Command::Info(name) => {
                 if let Some(c) = db::store::get_character(&self.db, name.trim()).ok().flatten() {
                     self.manager.active_mut().messages.push(Message {
@@ -333,7 +335,7 @@ impl App {
                         match db::store::create_character(&self.db, &row) {
                             Ok(_) => {
                                 let active = self.manager.active_name().to_string();
-                                if let Ok(m) = CharacterManager::load_all(&self.db, &active) { self.manager = m; }
+                                if let Ok(m) = CharacterManager::load_all(&self.db, &active, self.manager.active_world_name()) { self.manager = m; }
                                 self.error = Some(format!("角色 '{}' 已创建，可用 /self 设定背景", name));
                             }
                             Err(e) => self.error = Some(format!("创建失败: {}", e)),
@@ -373,45 +375,70 @@ impl App {
         }
     }
 
-    /// Export all characters and worlds to .md files
+    /// Switch to a world by name (or clear world filter)
+    pub fn handle_switch_world(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() || name == "none" {
+            self.manager.switch_world(&self.db, None);
+            self.error = Some("已切换到全部角色".into());
+            return;
+        }
+        if let Some(idx) = self.manager.worlds.iter().position(|w| w.slug == name) {
+            self.manager.switch_world(&self.db, Some(idx));
+            self.error = Some(format!("已切换到世界: {}", name));
+        } else {
+            self.error = Some(format!("世界 '{}' 不存在", name));
+        }
+    }
+
+    /// Link a character to a world
+    pub fn handle_link(&mut self, char_name: &str, world_name: &str) {
+        let (char_name, world_name) = (char_name.trim(), world_name.trim());
+        if char_name.is_empty() || world_name.is_empty() {
+            self.error = Some("用法: /link <角色slug> <世界slug>".into());
+            return;
+        }
+        let char = match db::store::get_character(&self.db, char_name).ok().flatten() {
+            Some(c) => c,
+            None => { self.error = Some(format!("角色 '{}' 不存在", char_name)); return; }
+        };
+        let world = match db::store::get_world(&self.db, world_name).ok().flatten() {
+            Some(w) => w,
+            None => { self.error = Some(format!("世界 '{}' 不存在", world_name)); return; }
+        };
+        match db::store::link_character_world(&self.db, char.id, world.id, "") {
+            Ok(_) => {
+                // Reload manager
+                let active = self.manager.active_name().to_string();
+                if let Ok(m) = CharacterManager::load_all(&self.db, &active, self.manager.active_world_name()) { self.manager = m; }
+                self.error = Some(format!("已将 '{}' 关联到世界 '{}'", char_name, world_name));
+            }
+            Err(e) => self.error = Some(format!("关联失败: {}", e)),
+        }
+    }
+
     pub fn handle_export(&mut self) {
         let mut count = 0;
-        // Export characters
         if let Ok(chars) = db::store::list_characters(&self.db) {
             let _ = std::fs::create_dir_all("characters");
             for c in &chars {
-                let md = format!(
-                    "---\nname: {name}\npersonality: {pers}\nspeech_style: {style}\nfirst_message: {first}\n---\n\n{body}\n",
-                    name=c.name, pers=c.personality, style=c.speech_style, first=c.first_message, body=c.background
-                );
-                let _ = std::fs::write(format!("characters/{}.md", c.slug), &md);
-                count += 1;
+                let md = format!("---\nname: {name}\npersonality: {pers}\nspeech_style: {style}\nfirst_message: {first}\n---\n\n{body}\n", name=c.name, pers=c.personality, style=c.speech_style, first=c.first_message, body=c.background);
+                let _ = std::fs::write(format!("characters/{}.md", c.slug), &md); count += 1;
             }
         }
-        // Export worlds
         if let Ok(worlds) = db::store::list_worlds(&self.db) {
             for w in &worlds {
-                let dir = format!("worlds/{}", w.slug);
-                let _ = std::fs::create_dir_all(&dir);
-                let md = format!(
-                    "---\nname: {name}\ndescription: {desc}\n---\n\n{overview}\n",
-                    name=w.name, desc=w.description, overview=w.overview
-                );
-                let _ = std::fs::write(format!("{}/world.md", dir), &md);
-                count += 1;
+                let dir = format!("worlds/{}", w.slug); let _ = std::fs::create_dir_all(&dir);
+                let md = format!("---\nname: {name}\ndescription: {desc}\n---\n\n{overview}\n", name=w.name, desc=w.description, overview=w.overview);
+                let _ = std::fs::write(format!("{}/world.md", dir), &md); count += 1;
             }
         }
-        // Export lore
         if let Ok(lores) = db::store::list_lore(&self.db) {
             let _ = std::fs::create_dir_all("lorebooks");
             for l in &lores {
-                let triggers = l.triggers.join(", ");
-                let md = format!(
-                    "# {key}\n\n| 属性 | 值 |\n|------|----|\n| triggers | {triggers} |\n| priority | {priority} |\n\n{content}\n",
-                    key=l.key, triggers=triggers, priority=l.priority, content=l.content
-                );
-                let _ = std::fs::write(format!("lorebooks/{}.md", l.key), &md);
-                count += 1;
+                let t = l.triggers.join(", ");
+                let md = format!("# {key}\n\n| 属性 | 值 |\n|------|----|\n| triggers | {t} |\n| priority | {p} |\n\n{content}\n", key=l.key, t=t, p=l.priority, content=l.content);
+                let _ = std::fs::write(format!("lorebooks/{}.md", l.key), &md); count += 1;
             }
         }
         self.error = Some(format!("已导出 {} 个文件", count));
@@ -486,6 +513,17 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                         }
                         KeyCode::Tab => { app.manager.next(); app.scroll_offset = 0; app.error = None; }
                         KeyCode::BackTab => { app.manager.prev(); app.scroll_offset = 0; app.error = None; }
+                        KeyCode::Char('w') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            if !app.manager.worlds.is_empty() {
+                                let next = match app.manager.active_world {
+                                    Some(i) if i + 1 < app.manager.worlds.len() => Some(i + 1),
+                                    Some(_) => None,
+                                    None => Some(0),
+                                };
+                                app.manager.switch_world(&app.db, next);
+                                app.scroll_offset = 0;
+                            }
+                        }
                         KeyCode::F(1) => { app.show_help = true; }
                         KeyCode::Enter => {
                             if app.loading { continue; }

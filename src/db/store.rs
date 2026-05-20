@@ -115,6 +115,12 @@ pub fn get_character_worlds(conn: &Connection, char_id: i64) -> anyhow::Result<V
     Ok(ids)
 }
 
+pub fn get_world_characters(conn: &Connection, world_id: i64) -> anyhow::Result<Vec<i64>> {
+    let mut stmt = conn.prepare("SELECT character_id FROM character_worlds WHERE world_id=?1")?;
+    let ids: Vec<i64> = stmt.query_map(params![world_id], |row| row.get(0))?.filter_map(|r| r.ok()).collect();
+    Ok(ids)
+}
+
 // ──────────────────────────────────────────────
 // Locations
 // ──────────────────────────────────────────────

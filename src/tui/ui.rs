@@ -42,38 +42,46 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default()
-        .title(" 角色 ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let has_worlds = !app.manager.worlds.is_empty();
+    let chunks = if has_worlds {
+        Layout::default().direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3 + app.manager.worlds.len().min(5) as u16)])
+            .split(area)
+    } else {
+        Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1)]).split(area)
+    };
 
-    let items: Vec<ListItem> = app.manager.order.iter()
-        .enumerate()
-        .map(|(i, name)| {
-            if i == app.manager.active_index {
-                ListItem::new(Line::from(vec![
-                    Span::styled(" ▶ ", Style::default().fg(Color::Green)),
-                    Span::styled(
-                        name.clone(),
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]))
+    // Character list
+    let block = Block::default().title(" 角色 ").borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan));
+    let items: Vec<ListItem> = app.manager.order.iter().enumerate().map(|(i, name)| {
+        if i == app.manager.active_index {
+            ListItem::new(Line::from(vec![Span::styled(" ▶ ", Style::default().fg(Color::Green)), Span::styled(name.clone(), Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))]))
+        } else {
+            ListItem::new(Line::from(vec![Span::raw("   "), Span::styled(name.clone(), Style::default().fg(Color::DarkGray))]))
+        }
+    }).collect();
+    f.render_widget(List::new(items).block(block), chunks[0]);
+
+    // World list
+    if has_worlds {
+        let world_block = Block::default().title(" 世界 ").borders(Borders::ALL).border_style(Style::default().fg(Color::Magenta));
+        let world_items: Vec<ListItem> = app.manager.worlds.iter().enumerate().map(|(i, w)| {
+            let is_active = app.manager.active_world == Some(i);
+            if is_active {
+                ListItem::new(Line::from(vec![Span::styled(" ◆ ", Style::default().fg(Color::Magenta)), Span::styled(w.slug.clone(), Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD))]))
             } else {
-                ListItem::new(Line::from(vec![
-                    Span::raw("   "),
-                    Span::styled(name.clone(), Style::default().fg(Color::DarkGray)),
-                ]))
+                ListItem::new(Line::from(vec![Span::raw("   "), Span::styled(w.slug.clone(), Style::default().fg(Color::DarkGray))]))
             }
-        })
-        .collect();
-
-    let list = List::new(items)
-        .block(block);
-
-    f.render_widget(list, area);
+        }).chain(std::iter::once({
+            let is_none = app.manager.active_world.is_none();
+            if is_none {
+                ListItem::new(Line::from(vec![Span::styled(" ◆ ", Style::default().fg(Color::Yellow)), Span::styled("全部", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))]))
+            } else {
+                ListItem::new(Line::from(vec![Span::raw("   "), Span::styled("全部", Style::default().fg(Color::DarkGray))]))
+            }
+        })).collect();
+        f.render_widget(List::new(world_items).block(world_block), chunks[1]);
+    }
 }
 
 fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
