@@ -19,7 +19,9 @@ pub fn build(
     }
     messages.push(ChatMessage {
         role: "system".into(),
-        content: system,
+        content: Some(system),
+        tool_calls: None,
+        tool_call_id: None,
     });
 
     // Recent history

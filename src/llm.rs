@@ -6,7 +6,12 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -15,11 +20,52 @@ struct ChatRequest {
     messages: Vec<ChatMessage>,
     temperature: f64,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Tool>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ToolFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: ToolCallFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    pub name: String,
+    pub arguments: String, // JSON string
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatChoice {
-    message: ChatMessage,
+    message: Option<ChatMessage>,
+    delta: Option<StreamDelta>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessageResp {
+    role: Option<String>,
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCall>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +76,8 @@ struct ChatResponse {
 #[derive(Debug, Deserialize)]
 struct StreamDelta {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCall>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,11 +112,15 @@ pub async fn chat(
     let messages = vec![
         ChatMessage {
             role: "system".into(),
-            content: system_prompt.into(),
+            content: Some(system_prompt.into()),
+            tool_calls: None,
+            tool_call_id: None,
         },
         ChatMessage {
             role: "user".into(),
-            content: user_message.into(),
+            content: Some(user_message.into()),
+            tool_calls: None,
+            tool_call_id: None,
         },
     ];
     chat_with_messages(config, &messages).await
@@ -86,6 +138,7 @@ pub async fn chat_with_messages(
         messages: messages.to_vec(),
         temperature: 0.8,
         stream: false,
+        tools: None,
     };
 
     let client = reqwest::Client::new();
@@ -113,10 +166,125 @@ pub async fn chat_with_messages(
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content)
+        .and_then(|c| c.message)
+        .and_then(|m| m.content)
         .unwrap_or_default();
 
     Ok(content)
+}
+
+/// Get the manage_state tool definition
+pub fn manage_state_tool() -> Tool {
+    Tool {
+        tool_type: "function".into(),
+        function: ToolFunction {
+            name: "manage_state".into(),
+            description: "管理角色/世界/地点状态。增删改查物品、事件、技能、状态、法则。\n用于: 记录新物品、更新角色状态、查询世界信息等。".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["get", "search", "add", "update", "delete"], "description": "get=获取, search=搜索, add=添加, update=更新, delete=删除"},
+                    "category": {"type": "string", "enum": ["item", "event", "skill", "status", "rule"], "description": "item=物品, event=事件, skill=技能, status=当前状态, rule=世界法则"},
+                    "key": {"type": "string", "description": "标识名（物品名/技能名/状态名等）"},
+                    "data": {"type": "object", "description": "数据体（添加/更新时使用），如 item: {qty:1, note:\"描述\"}, event: {desc:\"...\", importance:\"high\"}, skill: {desc:\"...\", type:\"passive\"}, status: {detail:\"...\"}"}
+                },
+                "required": ["action", "category", "key"]
+            }),
+        },
+    }
+}
+
+/// Chat with tools. The executor callback is called for each tool_call, returning the result string.
+/// Loops until LLM returns a text response.
+pub async fn chat_with_tools<F>(
+    config: &LlmConfig,
+    messages: &mut Vec<ChatMessage>,
+    executor: F,
+) -> anyhow::Result<String>
+where
+    F: Fn(&str, &str) -> String + Send,
+{
+    let tools = vec![manage_state_tool()];
+    let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+
+    loop {
+        let body = ChatRequest {
+            model: config.model.clone(),
+            messages: messages.clone(),
+            temperature: 0.8,
+            stream: false,
+            tools: Some(tools.clone()),
+        };
+
+        let resp = client.post(&url)
+            .header("Authorization", format!("Bearer {}", config.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send().await
+            .with_context(|| format!("Failed to connect to LLM at {url}"))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("LLM API error ({}): {text}", status.as_u16());
+        }
+
+        let data: ChatResponse = resp.json().await.with_context(|| "Failed to parse LLM response")?;
+        let choice = data.choices.into_iter().next()
+            .unwrap_or(ChatChoice { message: None, delta: None, finish_reason: None });
+
+        let msg = choice.message;
+
+        // If assistant has text content, return it
+        if let Some(ref m) = msg {
+            if let Some(ref content) = m.content {
+                if !content.is_empty() {
+                    // Add to messages for history
+                    messages.push(ChatMessage {
+                        role: "assistant".into(),
+                        content: Some(content.clone()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                    return Ok(content.clone());
+                }
+            }
+        }
+
+        // If assistant has tool calls, execute them
+        if let Some(ref m) = msg {
+            if let Some(ref calls) = m.tool_calls {
+                // Push assistant message with tool_calls
+                messages.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(calls.clone()),
+                    tool_call_id: None,
+                });
+
+                for call in calls {
+                    if call.function.name == "manage_state" {
+                        let args = &call.function.arguments;
+                        let result = executor("manage_state", args);
+                        // Push tool result
+                        messages.push(ChatMessage {
+                            role: "tool".into(),
+                            content: Some(result),
+                            tool_calls: None,
+                            tool_call_id: Some(call.id.clone()),
+                        });
+                    }
+                }
+                continue; // Continue the loop to get final answer
+            }
+        }
+
+        // No content and no tool calls - something unexpected
+        break;
+    }
+
+    Ok(String::new())
 }
 
 /// Streaming chat — returns a receiver for token-by-token output.
@@ -151,6 +319,7 @@ async fn stream_impl(
         messages: messages.to_vec(),
         temperature: 0.8,
         stream: true,
+        tools: None,
     };
 
     let client = reqwest::Client::new();

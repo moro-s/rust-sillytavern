@@ -738,7 +738,7 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
 
                             let history: Vec<_> = app.manager.active().messages.iter()
                                 .filter(|m| m.role != "system")
-                                .map(|m| llm::ChatMessage { role: m.role.clone(), content: m.content.clone() })
+                                .map(|m| llm::ChatMessage { role: m.role.clone(), content: Some(m.content.clone()), tool_calls: None, tool_call_id: None })
                                 .collect();
 
                             let all_messages = conversation::context::build(&system_prompt, &history, &[], 20);
@@ -747,20 +747,45 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                             let all_messages = if lore_text.is_empty() { all_messages } else {
                                 let mut msgs = all_messages;
                                 if let Some(sys) = msgs.first_mut() {
-                                    sys.content.push_str(&format!("\n\n---\n【当前世界信息】\n{}", lore_text));
+                                if let Some(ref mut content) = sys.content {
+                                    content.push_str(&format!("\n\n---\n【当前世界信息】\n{}", lore_text));
+                                }
                                 }
                                 msgs
                             };
 
                             if use_stream {
-                                let cancel_rx = app.cancel_tx.take().map(|tx| tx.subscribe());
-                                let mut stream_rx = llm::chat_stream(llm_config, all_messages, cancel_rx);
-                                let tx = tx.clone();
-                                tokio::spawn(async move { while let Some(e) = stream_rx.recv().await { let _ = tx.send(AppEvent::Stream(e)); } });
-                            } else {
-                                let tx = tx.clone();
-                                tokio::spawn(async move { let _ = tx.send(AppEvent::NonStream(llm::chat_with_messages(&llm_config, &all_messages).await)); });
-                            }
+                            let cancel_rx = app.cancel_tx.take().map(|tx| tx.subscribe());
+                            let mut stream_rx = llm::chat_stream(llm_config, all_messages, cancel_rx);
+                            let tx = tx.clone();
+                            tokio::spawn(async move { while let Some(e) = stream_rx.recv().await { let _ = tx.send(AppEvent::Stream(e)); } });
+                        } else {
+                            // Use tools-enabled chat (open fresh connection for spawned task)
+                            let char_id = app.manager.active().id;
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                let db = db::schema::open().expect("Failed to open DB for tools");
+                                let mut messages = all_messages;
+                                let result = llm::chat_with_tools(&llm_config, &mut messages, move |tool_name, args_json| {
+                                    if tool_name == "manage_state" {
+                                        if let Ok(args) = serde_json::from_str::<serde_json::Value>(args_json) {
+                                            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("get");
+                                            let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("item");
+                                            let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                                            let data = args.get("data").map(|v| v.to_string()).unwrap_or_default();
+                                            match db::store::manage_state(
+                                                &db, "character_states", char_id,
+                                                action, category, key, &data
+                                            ) {
+                                                Ok(result) => result,
+                                                Err(e) => format!("Error: {}", e),
+                                            }
+                                        } else { "Invalid arguments".to_string() }
+                                    } else { format!("Unknown tool: {}", tool_name) }
+                                }).await;
+                                let _ = tx.send(AppEvent::NonStream(result));
+                            });
+                        }
                         }
                         KeyCode::Char(c) => { app.insert_char(c); }
                         KeyCode::Backspace => { app.remove_char_before(); }

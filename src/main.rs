@@ -99,8 +99,8 @@ async fn main() -> anyhow::Result<()> {
 
         if cfg.llm.stream {
             let messages = vec![
-                llm::ChatMessage { role: "system".into(), content: system_prompt },
-                llm::ChatMessage { role: "user".into(), content: msg },
+                llm::ChatMessage { role: "system".into(), content: Some(system_prompt), tool_calls: None, tool_call_id: None },
+                llm::ChatMessage { role: "user".into(), content: Some(msg), tool_calls: None, tool_call_id: None },
             ];
             let mut rx = llm::chat_stream(cfg.llm, messages, None);
             while let Some(event) = rx.recv().await {
