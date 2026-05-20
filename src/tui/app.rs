@@ -203,6 +203,8 @@ impl App {
             command::parser::Command::World(name) => { self.handle_switch_world(&name); return; }
             command::parser::Command::Link(char_name, world_name) => { self.handle_link(&char_name, &world_name); return; }
             command::parser::Command::Location(args) => { self.handle_location(&args); return; }
+            command::parser::Command::Time(args) => { self.handle_time(&args); return; }
+            command::parser::Command::Timeline => { self.handle_timeline(); return; }
             command::parser::Command::Info(name) => {
                 if let Some(c) = db::store::get_character(&self.db, name.trim()).ok().flatten() {
                     self.manager.active_mut().messages.push(Message {
@@ -419,59 +421,89 @@ impl App {
         }
     }
 
-    /// Location management: /location add <world> <name> [desc]
+    /// Advance world timeline: /time <label> [description]
     pub fn handle_location(&mut self, args: &str) {
         let parts: Vec<&str> = args.splitn(3, ' ').collect();
         let action = parts.first().map(|s| *s).unwrap_or("list");
         let world_slug = parts.get(1).map(|s| *s).unwrap_or("");
         let rest = parts.get(2).map(|s| *s).unwrap_or("");
-
         match action {
             "add" | "create" => {
-                if world_slug.is_empty() || rest.is_empty() {
-                    self.error = Some("用法: /location add <世界slug> <地点名> [描述]".into());
-                    return;
-                }
-                let name = rest;
-                let slug = name;
-                // Find world_id
+                if world_slug.is_empty() || rest.is_empty() { self.error = Some("用法: /location add <世界> <地点>".into()); return; }
                 if let Ok(Some(world)) = db::store::get_world(&self.db, world_slug) {
-                    let row = db::store::LocationRow {
-                        id: 0, slug: slug.to_string(), name: name.to_string(),
-                        description: String::new(), connects_to: String::new(), world_id: world.id,
-                    };
+                    let row = db::store::LocationRow { id: 0, slug: rest.to_string(), name: rest.to_string(), description: String::new(), connects_to: String::new(), world_id: world.id };
                     match db::store::create_location(&self.db, &row) {
-                        Ok(_) => self.error = Some(format!("地点 '{}' 已创建在 '{}'", name, world_slug)),
+                        Ok(_) => self.error = Some(format!("地点 '{}' 已创建", rest)),
                         Err(e) => self.error = Some(format!("创建失败: {}", e)),
                     }
-                } else {
-                    self.error = Some(format!("世界 '{}' 不存在", world_slug));
-                }
+                } else { self.error = Some(format!("世界 '{}' 不存在", world_slug)); }
             }
             "list" | "ls" => {
-                let target = if world_slug.is_empty() {
-                    self.manager.active_world_name().map(|s| s.to_string())
-                } else { Some(world_slug.to_string()) };
-                if let Some(ws) = target {
+                let ws = if world_slug.is_empty() { self.manager.active_world_name().map(|s| s.to_string()) } else { Some(world_slug.to_string()) };
+                if let Some(ws) = ws {
                     if let Ok(Some(world)) = db::store::get_world(&self.db, &ws) {
                         if let Ok(locs) = db::store::list_locations(&self.db, world.id) {
-                            if locs.is_empty() {
-                                self.error = Some(format!("世界 '{}' 暂无地点", ws));
-                            } else {
-                                let list = locs.iter().map(|l| format!("- {} ({})", l.name, l.slug)).collect::<Vec<_>>().join("\n");
+                            if locs.is_empty() { self.error = Some(format!("世界 '{}' 暂无地点", ws)); }
+                            else {
+                                let list = locs.iter().map(|l| format!("- {}", l.name)).collect::<Vec<_>>().join("\n");
                                 self.manager.active_mut().messages.push(Message { role: "system".into(), content: format!("世界 '{}':\n{}", ws, list) });
                                 self.scroll_offset = 0;
-                                return;
                             }
                         }
                     }
+                } else { self.error = Some("请激活世界或 /location list <世界>".into()); }
+            }
+            _ => { self.error = Some("用法: /location add <世界> <地点> 或 /location list".into()); }
+        }
+    }
+
+    /// Advance world timeline: /time <label> [description]
+    pub fn handle_time(&mut self, args: &str) {
+        let parts: Vec<&str> = args.splitn(2, ' ').collect();
+        let label = parts.first().map(|s| *s).unwrap_or("");
+        let desc = parts.get(1).map(|s| *s).unwrap_or("");
+
+        if label.is_empty() {
+            self.error = Some("用法: /time <标签> [描述]  如: /time 第2天早晨".into());
+            return;
+        }
+
+        let world_id = match self.manager.active_world {
+            Some(i) => self.manager.worlds[i].id,
+            None => { self.error = Some("请先激活一个世界".into()); return; }
+        };
+
+        match db::store::advance_timeline(&self.db, world_id, label, desc) {
+            Ok(_) => self.error = Some(format!("时间推进到: {}", label)),
+            Err(e) => self.error = Some(format!("时间推进失败: {}", e)),
+        }
+    }
+
+    /// Show current world timeline
+    pub fn handle_timeline(&mut self) {
+        let world_id = match self.manager.active_world {
+            Some(i) => self.manager.worlds[i].id,
+            None => { self.error = Some("请先激活一个世界".into()); return; }
+        };
+
+        match db::store::list_timeline(&self.db, world_id) {
+            Ok(entries) => {
+                if entries.is_empty() {
+                    self.error = Some("时间线为空，使用 /time 添加时刻".into());
                 } else {
-                    self.error = Some("请指定世界: /location list <世界>".into());
+                    let text = entries.iter()
+                        .map(|e| format!("  {} - {}", e.time_label, e.description))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let current = entries.last().unwrap();
+                    self.manager.active_mut().messages.push(Message {
+                        role: "system".into(),
+                        content: format!("世界时间线 (当前: {}):\n{}", current.time_label, text),
+                    });
+                    self.scroll_offset = 0;
                 }
             }
-            _ => {
-                self.error = Some("用法: /location add <世界> <地点> 或 /location list [世界]".into());
-            }
+            Err(e) => self.error = Some(format!("读取时间线失败: {}", e)),
         }
     }
 
@@ -699,9 +731,13 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                             if !app.self_persona.is_empty() {
                                 system_prompt.push_str(&format!("\n\n【当前对话对象的设定】\n{}", app.self_persona));
                             }
-                            // Inject world-level context (events, rules) if active world
+                            // Inject world-level context (events, rules, timeline)
                             if let Some(widx) = app.manager.active_world {
                                 if let Some(world) = app.manager.worlds.get(widx) {
+                                    // Timeline current time
+                                    if let Ok(Some(tl)) = db::store::current_timeline(&app.db, world.id) {
+                                        system_prompt.push_str(&format!("\n\n【世界当前时间】\n{}", tl.time_label));
+                                    }
                                     if let Ok(states) = db::store::list_states(&app.db, "world_states", world.id) {
                                         let events: Vec<_> = states.iter().filter(|(c,_,_)| c=="event").map(|(_,k,d)| format!("{}:{}", k, d)).collect();
                                         let rules: Vec<_> = states.iter().filter(|(c,_,_)| c=="rule").map(|(_,k,d)| format!("{}:{}", k, d)).collect();

@@ -137,6 +137,15 @@ fn init(conn: &Connection) -> Result<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS timeline (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            world_id   INTEGER NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+            time_label TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_world ON timeline(world_id, id);
         "
     )?;
     Ok(())

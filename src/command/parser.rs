@@ -35,6 +35,10 @@ pub enum Command {
     Link(String, String),
     /// `/location <action> <args>` — manage locations
     Location(String),
+    /// `/time <label>` — advance timeline
+    Time(String),
+    /// `/timeline` — view world timeline
+    Timeline,
     /// `?<name>` — show character info
     Info(String),
     /// `?list` — list all characters
@@ -72,6 +76,8 @@ pub fn parse(input: &str) -> (Command, String) {
                 (Command::Link(char_name.trim().to_string(), world_name.trim().to_string()), String::new())
             },
             "location" | "loc" => (Command::Location(_args.trim().to_string()), String::new()),
+            "time" => (Command::Time(_args.trim().to_string()), String::new()),
+            "timeline" | "tl" => (Command::Timeline, String::new()),
             _ => (Command::None, input.to_string()),
         };
     }

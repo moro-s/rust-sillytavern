@@ -278,6 +278,42 @@ pub fn manage_state(conn: &Connection, table: &str, owner_id: i64, action: &str,
 }
 
 // ──────────────────────────────────────────────
+// Timeline
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct TimelineEntry {
+    pub id: i64,
+    pub world_id: i64,
+    pub time_label: String,
+    pub description: String,
+    pub created_at: String,
+}
+
+pub fn advance_timeline(conn: &Connection, world_id: i64, time_label: &str, description: &str) -> anyhow::Result<i64> {
+    conn.execute(
+        "INSERT INTO timeline (world_id, time_label, description) VALUES (?1, ?2, ?3)",
+        params![world_id, time_label, description],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn current_timeline(conn: &Connection, world_id: i64) -> anyhow::Result<Option<TimelineEntry>> {
+    let mut stmt = conn.prepare("SELECT id, world_id, time_label, description, created_at FROM timeline WHERE world_id=?1 ORDER BY id DESC LIMIT 1")?;
+    Ok(stmt.query_row(params![world_id], |row| {
+        Ok(TimelineEntry { id: row.get(0)?, world_id: row.get(1)?, time_label: row.get(2)?, description: row.get(3)?, created_at: row.get(4)? })
+    }).ok())
+}
+
+pub fn list_timeline(conn: &Connection, world_id: i64) -> anyhow::Result<Vec<TimelineEntry>> {
+    let mut stmt = conn.prepare("SELECT id, world_id, time_label, description, created_at FROM timeline WHERE world_id=?1 ORDER BY id")?;
+    let rows = stmt.query_map(params![world_id], |row| {
+        Ok(TimelineEntry { id: row.get(0)?, world_id: row.get(1)?, time_label: row.get(2)?, description: row.get(3)?, created_at: row.get(4)? })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(rows)
+}
+
+// ──────────────────────────────────────────────
 // Sessions (updated for new schema)
 // ──────────────────────────────────────────────
 
