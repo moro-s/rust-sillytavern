@@ -173,7 +173,15 @@ pub async fn chat_with_messages(
     Ok(content)
 }
 
-/// Get the manage_state tool definition
+/// Get the tools list
+pub fn default_tools() -> Vec<Tool> {
+    vec![
+        manage_state_tool(),
+        advance_time_tool(),
+    ]
+}
+
+/// Get the manage_state tool
 pub fn manage_state_tool() -> Tool {
     Tool {
         tool_type: "function".into(),
@@ -194,6 +202,25 @@ pub fn manage_state_tool() -> Tool {
     }
 }
 
+/// Get the advance_time tool
+pub fn advance_time_tool() -> Tool {
+    Tool {
+        tool_type: "function".into(),
+        function: ToolFunction {
+            name: "advance_time".into(),
+            description: "推进世界时间线到下一个时刻。用于剧情推进、跳过时间段、进入新场景。\n当剧情需要时间推进（如'第二天'、'一周后'）时调用。".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "description": "时间标签，如 '第2天早晨', '三天后', '一周后的夜晚'"},
+                    "description": {"type": "string", "description": "时间推进的描述/原因"}
+                },
+                "required": ["label"]
+            }),
+        },
+    }
+}
+
 /// Chat with tools. The executor callback is called for each tool_call, returning the result string.
 /// Loops until LLM returns a text response.
 pub async fn chat_with_tools<F>(
@@ -204,7 +231,7 @@ pub async fn chat_with_tools<F>(
 where
     F: Fn(&str, &str) -> String + Send,
 {
-    let tools = vec![manage_state_tool()];
+    let tools = default_tools();
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
 

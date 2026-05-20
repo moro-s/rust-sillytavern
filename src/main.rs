@@ -4,6 +4,7 @@ mod config;
 mod conversation;
 mod db;
 mod llm;
+mod logging;
 mod lorebook;
 mod tui;
 
@@ -72,6 +73,8 @@ fn list_available_worlds() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    logging::init()?;
+
     let args = Args::parse();
 
     // List commands — print and exit
@@ -92,10 +95,21 @@ async fn main() -> anyhow::Result<()> {
         // CLI mode: use specified character or default
         let char_name = args.character.as_deref().unwrap_or("innkeeper");
         let cfg = config::load()?;
-        let card = character::load(char_name)?;
-        let system_prompt = character::build_system_prompt(&card);
-
-        println!("\n[{}]", card.meta.name);
+        // Use DB for character info in CLI mode
+        let db = db::schema::open()?;
+        let card = db::store::get_character(&db, char_name)?
+            .ok_or_else(|| anyhow::anyhow!("Character '{}' not found in database", char_name))?;
+        let system_prompt = format!(
+            "你是一个角色扮演助手。请完全沉浸入以下角色的设定中，用角色的口吻回复。\n\n\
+             【角色名】{}\n\n【性格】{}\n\n【说话风格】{}\n\n【开场白】{}\n\n\
+             【重要规则】\n- 始终保持角色，不要跳出角色说话\n\
+             - 不要代替用户说话或替用户做决定\n\
+             - 回复时只输出角色的对话和动作/场景描写\n\
+             - 动作描写用括号包裹，如 (放下酒杯)\n{}",
+            card.name, card.personality, card.speech_style, card.first_message,
+            if card.background.is_empty() { String::new() } else { format!("\n\n【背景知识】\n{}\n", card.background) },
+        );
+        println!("\n[{}]", card.name);
 
         if cfg.llm.stream {
             let messages = vec![

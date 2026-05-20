@@ -107,18 +107,20 @@ fn init(conn: &Connection) -> Result<()> {
             key          TEXT NOT NULL,
             data         TEXT NOT NULL DEFAULT '{}',
             seq          INTEGER NOT NULL DEFAULT 0,
+            timeline_id  INTEGER REFERENCES timeline(id) ON DELETE SET NULL,
             created_at   TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_char_states ON character_states(character_id, category);
 
         CREATE TABLE IF NOT EXISTS world_states (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            world_id   INTEGER NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
-            category   TEXT NOT NULL,
-            key        TEXT NOT NULL,
-            data       TEXT NOT NULL DEFAULT '{}',
-            seq        INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            world_id    INTEGER NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+            category    TEXT NOT NULL,
+            key         TEXT NOT NULL,
+            data        TEXT NOT NULL DEFAULT '{}',
+            seq         INTEGER NOT NULL DEFAULT 0,
+            timeline_id INTEGER REFERENCES timeline(id) ON DELETE SET NULL,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_world_states ON world_states(world_id, category);
 
@@ -129,6 +131,7 @@ fn init(conn: &Connection) -> Result<()> {
             key         TEXT NOT NULL,
             data        TEXT NOT NULL DEFAULT '{}',
             seq         INTEGER NOT NULL DEFAULT 0,
+            timeline_id INTEGER REFERENCES timeline(id) ON DELETE SET NULL,
             created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_loc_states ON location_states(location_id, category);

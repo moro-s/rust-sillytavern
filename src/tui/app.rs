@@ -373,7 +373,8 @@ impl App {
         let key = parts.get(2).map(|s| *s).unwrap_or("");
         let data_str = parts.get(3).map(|s| *s).unwrap_or("");
         let char_id = self.manager.active().id;
-        match db::store::manage_state(&self.db, "character_states", char_id, action, category, key, data_str) {
+        let tl_id = self.current_timeline_id();
+        match db::store::manage_state(&self.db, "character_states", char_id, action, category, key, data_str, tl_id) {
             Ok(result) => self.error = Some(result),
             Err(e) => self.error = Some(format!("状态操作失败: {}", e)),
         }
@@ -617,6 +618,13 @@ impl App {
 
     pub fn character_name(&self) -> &str { self.manager.active_name() }
 
+    pub fn current_timeline_id(&self) -> Option<i64> {
+        self.manager.active_world.and_then(|i| {
+            let world_id = self.manager.worlds[i].id;
+            db::store::current_timeline(&self.db, world_id).ok().flatten().map(|t| t.id)
+        })
+    }
+
     pub fn lore_entries(&self) -> Vec<db::store::LoreRow> {
         db::store::list_lore(&self.db).unwrap_or_default()
     }
@@ -809,12 +817,22 @@ async fn run_app(terminal: &mut DefaultTerminal, character_name: &str, world: Op
                                             let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("item");
                                             let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
                                             let data = args.get("data").map(|v| v.to_string()).unwrap_or_default();
+                                            let tl_id = db::store::current_timeline(&db, 1).ok().flatten().map(|t| t.id);
                                             match db::store::manage_state(
                                                 &db, "character_states", char_id,
-                                                action, category, key, &data
+                                                action, category, key, &data, tl_id
                                             ) {
                                                 Ok(result) => result,
                                                 Err(e) => format!("Error: {}", e),
+                                            }
+                                        } else { "Invalid arguments".to_string() }
+                                    } else if tool_name == "advance_time" {
+                                        if let Ok(args) = serde_json::from_str::<serde_json::Value>(args_json) {
+                                            let label = args.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                                            let desc = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                                            match db::store::advance_timeline(&db, 1, label, desc) {
+                                                Ok(_) => format!("时间已推进到: {}", label),
+                                                Err(e) => format!("时间推进失败: {}", e),
                                             }
                                         } else { "Invalid arguments".to_string() }
                                     } else { format!("Unknown tool: {}", tool_name) }

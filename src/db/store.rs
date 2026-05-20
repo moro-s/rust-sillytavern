@@ -225,13 +225,13 @@ pub fn list_states(conn: &Connection, table: &str, owner_id: i64) -> anyhow::Res
     Ok(rows)
 }
 
-pub fn manage_state(conn: &Connection, table: &str, owner_id: i64, action: &str, category: &str, key: &str, data: &str) -> anyhow::Result<String> {
+pub fn manage_state(conn: &Connection, table: &str, owner_id: i64, action: &str, category: &str, key: &str, data: &str, timeline_id: Option<i64>) -> anyhow::Result<String> {
     let id_col = format!("{}_id", table.strip_suffix("_states").unwrap_or(table));
     match action {
         "add" => {
             conn.execute(
-                &format!("INSERT INTO {} ({}, category, key, data) VALUES (?1,?2,?3,?4)", table, id_col),
-                params![owner_id, category, key, data],
+                &format!("INSERT INTO {} ({}, category, key, data, timeline_id) VALUES (?1,?2,?3,?4,?5)", table, id_col),
+                params![owner_id, category, key, data, timeline_id],
             )?;
             Ok(format!("已添加 {}: {}", category, key))
         }
@@ -257,7 +257,7 @@ pub fn manage_state(conn: &Connection, table: &str, owner_id: i64, action: &str,
         }
         _ => {
             let mut stmt = conn.prepare(
-                &format!("SELECT category, key, data FROM {} WHERE {}=?1 AND category=?2", table, id_col)
+                &format!("SELECT category, key, data FROM {} WHERE {}=?1 AND category=?2 AND (key LIKE '%'||?3||'%' OR key='' OR ?3='') GROUP BY key HAVING MAX(id) ORDER BY seq", table, id_col)
             )?;
             let rows: Vec<String> = stmt.query_map(params![owner_id, category], |row| {
                 let k: String = row.get(1)?;

@@ -69,12 +69,12 @@ pub fn load_all(dir: &str) -> Vec<LoreEntry> {
                                 entries.push(entry);
                             }
                             Err(e) => {
-                                eprintln!("Warning: failed to parse {}: {}", path.display(), e);
+                                log::warn!("无法解析 {}: {}", path.display(), e);
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("Warning: failed to read {}: {}", path.display(), e);
+                        log::warn!("无法读取 {}: {}", path.display(), e);
                     }
                 }
             }
